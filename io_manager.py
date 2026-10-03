@@ -99,3 +99,12 @@ def parse_number_list(text: str, maximum: int) -> list[int] | None:
         if number not in numbers:
             numbers.append(number)
     return numbers
+
+#Prompts
+def prompt_field(label: str, validator: Callable[[str], str]) -> str:
+    while True:
+        text = ask(f"{label}: ")
+        problem = validator(text)
+        if not problem:
+            return text
+        show_error(problem)
