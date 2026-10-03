@@ -85,3 +85,17 @@ def validate_note(text: str) -> str:
     if len(text) > MAX_NOTE_LENGTH:
         return f"Note must be at most {MAX_NOTE_LENGTH} characters."
     return ""
+
+def parse_number_list(text: str, maximum: int) -> list[int] | None:
+    """Parse '1, 3' into [1, 3]. Returns None if any entry is invalid or the list is empty."""
+    parts = [part for part in re.split(r"[,\s]+", text.strip()) if part]
+    if not parts or not all(part.isdecimal() for part in parts):
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        number = int(part)
+        if not 1 <= number <= maximum:
+            return None
+        if number not in numbers:
+            numbers.append(number)
+    return numbers
