@@ -108,3 +108,34 @@ def prompt_field(label: str, validator: Callable[[str], str]) -> str:
         if not problem:
             return text
         show_error(problem)
+
+def prompt_choice(label: str, options: list[str]) -> str:
+    while True:
+        say(label)
+        for number, option in enumerate(options, start=1):
+            say(f"  {number}. {option}")
+        text = ask("Enter number: ")
+        if text.isdecimal() and 1 <= int(text) <= len(options):
+            return options[int(text) - 1]
+        show_error(f"Please enter a number from 1 to {len(options)}.")
+
+
+def prompt_multi_choice(label: str, options: list[str]) -> list[str]:
+    while True:
+        say(label)
+        for number, option in enumerate(options, start=1):
+            say(f"  {number}. {option}")
+        numbers = parse_number_list(ask("Enter one or more numbers, separated by commas: "), len(options))
+        if numbers is not None:
+            return [options[number - 1] for number in numbers]
+        show_error(f"Please enter numbers from 1 to {len(options)}, e.g. 1,3")
+
+
+def confirm(question: str) -> bool:
+    while True:
+        text = ask(f"{question} (y/n): ").lower()
+        if text in ("y", "yes"):
+            return True
+        if text in ("n", "no"):
+            return False
+        show_error("Please answer y or n.")
