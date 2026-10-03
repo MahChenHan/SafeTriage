@@ -139,3 +139,15 @@ def confirm(question: str) -> bool:
         if text in ("n", "no"):
             return False
         show_error("Please answer y or n.")
+
+# ------------------------------------------------------------ user terminal
+def collect_report() -> dict:
+    show_heading("NEW HAZARD REPORT")
+    reporter_id = prompt_field("Your name", validate_name)
+    location = prompt_field("Location (e.g. Discussion Room 01-02)", validate_location)
+    description = prompt_field("Describe the hazard in your own words", validate_description)
+    return {
+        "reporter_id": reporter_id,
+        "location": location,
+        "description": description,
+    }
