@@ -85,3 +85,69 @@ def validate_note(text: str) -> str:
     if len(text) > MAX_NOTE_LENGTH:
         return f"Note must be at most {MAX_NOTE_LENGTH} characters."
     return ""
+
+def parse_number_list(text: str, maximum: int) -> list[int] | None:
+    """Parse '1, 3' into [1, 3]. Returns None if any entry is invalid or the list is empty."""
+    parts = [part for part in re.split(r"[,\s]+", text.strip()) if part]
+    if not parts or not all(part.isdecimal() for part in parts):
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        number = int(part)
+        if not 1 <= number <= maximum:
+            return None
+        if number not in numbers:
+            numbers.append(number)
+    return numbers
+
+#Prompts
+def prompt_field(label: str, validator: Callable[[str], str]) -> str:
+    while True:
+        text = ask(f"{label}: ")
+        problem = validator(text)
+        if not problem:
+            return text
+        show_error(problem)
+
+def prompt_choice(label: str, options: list[str]) -> str:
+    while True:
+        say(label)
+        for number, option in enumerate(options, start=1):
+            say(f"  {number}. {option}")
+        text = ask("Enter number: ")
+        if text.isdecimal() and 1 <= int(text) <= len(options):
+            return options[int(text) - 1]
+        show_error(f"Please enter a number from 1 to {len(options)}.")
+
+
+def prompt_multi_choice(label: str, options: list[str]) -> list[str]:
+    while True:
+        say(label)
+        for number, option in enumerate(options, start=1):
+            say(f"  {number}. {option}")
+        numbers = parse_number_list(ask("Enter one or more numbers, separated by commas: "), len(options))
+        if numbers is not None:
+            return [options[number - 1] for number in numbers]
+        show_error(f"Please enter numbers from 1 to {len(options)}, e.g. 1,3")
+
+
+def confirm(question: str) -> bool:
+    while True:
+        text = ask(f"{question} (y/n): ").lower()
+        if text in ("y", "yes"):
+            return True
+        if text in ("n", "no"):
+            return False
+        show_error("Please answer y or n.")
+
+# ------------------------------------------------------------ user terminal
+def collect_report() -> dict:
+    show_heading("NEW HAZARD REPORT")
+    reporter_id = prompt_field("Your name", validate_name)
+    location = prompt_field("Location (e.g. Discussion Room 01-02)", validate_location)
+    description = prompt_field("Describe the hazard in your own words", validate_description)
+    return {
+        "reporter_id": reporter_id,
+        "location": location,
+        "description": description,
+    }
