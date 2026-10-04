@@ -318,16 +318,16 @@ def prompt_incident_id(valid_ids: list[str]) -> str:
 >>>>>>> 9efda7f (added admin menu, admin id and incident id prompts)
 =======
 
-    def prompt_review_action(can_approve: bool) -> str:
-    options = {}
-    if can_approve:
-        options["Approve recommendation and dispatch"] = "approve"
-    options["Override priority / teams"] = "override"
-    options["Reject report (no dispatch)"] = "reject"
-    options["Back"] = "back"
-    if not can_approve:
-        say("This incident has no AI-based rating, so it cannot be approved as-is.")
-    return options[prompt_choice("Your decision:", list(options))]
+def prompt_review_action(can_approve: bool) -> str:
+options = {}
+if can_approve:
+    options["Approve recommendation and dispatch"] = "approve"
+options["Override priority / teams"] = "override"
+options["Reject report (no dispatch)"] = "reject"
+options["Back"] = "back"
+if not can_approve:
+    say("This incident has no AI-based rating, so it cannot be approved as-is.")
+return options[prompt_choice("Your decision:", list(options))]
 
 
 def prompt_note(required: bool) -> str:
