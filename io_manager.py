@@ -151,3 +151,38 @@ def collect_report() -> dict:
         "location": location,
         "description": description,
     }
+
+def show_user_welcome(record_count: int) -> None:
+    show_heading("SAFETRIAGE - HAZARD REPORTING")
+    say("Describe what you see and safety staff will be alerted.")
+    say(f"({record_count} incident(s) currently on file)")
+
+
+def show_submission(record: dict) -> None:
+    decision = record.get("decision", {})
+    analysis = (record.get("ai") or {}).get("analysis")
+    say()
+    say(THIN)
+    say(f"Report saved as {record.get('id', '?')}")
+    if record.get("status") == "auto_rejected":
+        say("This did not look like a workplace hazard, so it was not dispatched.")
+        say("If you meant to report a hazard, please submit again with more detail.")
+    elif analysis is None:
+        ai = record.get("ai") or {}
+        say("Automated analysis was unavailable. Safety staff have been notified to triage this manually.")
+        say(f"Reason: {ai.get('error_type', 'unknown')}: {str(ai.get('error', ''))[:300]}")
+    else:
+        say(f"Hazards detected     : {', '.join(analysis['hazard_types'])}")
+        say(f"Provisional priority : {decision.get('priority')}")
+        say(f"Recommended team(s)  : {format_teams(decision.get('teams', []))}")
+        say(f"Recommended action   : {decision.get('action')}")
+        if decision.get("notify_staff"):
+            say("Safety staff have been notified and will review this report.")
+        else:
+            say("Safety staff will review this report.")
+    say(THIN)
+
+
+# ----------------------------------------------------------- admin terminal
+def format_teams(teams: list[str]) -> str:
+    return ", ".join(teams) if teams else "-"
