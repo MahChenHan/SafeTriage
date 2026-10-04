@@ -271,3 +271,31 @@ def show_pending_list(pending: list[dict], urgent_count: int) -> None:
         say()
         say(f"!!! ALERT: {urgent_count} urgent incident(s) need attention !!!")
     show_incident_table(pending, "PENDING REVIEW (most urgent first)")
+
+def admin_menu() -> str:
+    options = {
+        "Review a pending incident": "review",
+        "History": "history",
+        "Quit": "quit",
+    }
+    choice = prompt_choice("\nWhat would you like to do?", list(options))
+    return options[choice]
+
+
+def prompt_admin_id() -> str:
+    return prompt_field("Admin ID", validate_id)
+
+
+def prompt_incident_id(valid_ids: list[str]) -> str:
+    """Ask for an incident id (or just its number). Blank returns ''."""
+    while True:
+        text = ask("Incident ID (e.g. INC-0003 or 3; blank to go back): ").upper()
+        if not text:
+            return ""
+        if text in valid_ids:
+            return text
+        if text.isdecimal():
+            matches = [item for item in valid_ids if item.endswith("-" + text.zfill(4))]
+            if matches:
+                return matches[0]
+        show_error("That ID is not in the list shown.")
