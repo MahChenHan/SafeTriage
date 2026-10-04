@@ -186,3 +186,88 @@ def show_submission(record: dict) -> None:
 # ----------------------------------------------------------- admin terminal
 def format_teams(teams: list[str]) -> str:
     return ", ".join(teams) if teams else "-"
+
+def format_incident_line(record: dict) -> str:
+    shown = record.get("final") or record.get("decision") or {}
+    return (
+        f"{str(record.get('id', '?')):<9}"
+        f"{str(shown.get('priority', '?')):<10}"
+        f"{str(record.get('status', '?')):<16}"
+        f"{str(record.get('location', ''))[:20]:<21}"
+        f"{format_teams(shown.get('teams', []))}"
+    )
+
+
+def format_incident_detail(record: dict) -> str:
+    decision = record.get("decision") or {}
+    ai = record.get("ai") or {}
+    analysis = ai.get("analysis")
+    lines = [
+        f"ID              : {record.get('id')}",
+        f"Status          : {record.get('status')}",
+        f"Reported        : {record.get('reported_at')} by {record.get('reporter_id')}",
+        f"Location        : {record.get('location')}",
+        f"Description     : {record.get('description')}",
+        THIN,
+    ]
+    if analysis:
+        lines += [
+            "AI ANALYSIS",
+            f"  Hazards        : {', '.join(analysis['hazard_types']) or '-'}",
+            f"  Severity       : {analysis['severity']}/5",
+            f"  Injury present : {'yes' if analysis['injury_present'] else 'no'}",
+            f"  People exposed : {analysis['people_exposed']}",
+            f"  Confidence     : {analysis['confidence']:.2f}",
+            f"  Summary        : {analysis['summary']}",
+        ]
+    else:
+        lines.append(f"AI ANALYSIS UNAVAILABLE ({ai.get('error_type', 'unknown')}): {ai.get('error', '')}")
+    lines += [
+        THIN,
+        "RULE ENGINE RECOMMENDATION",
+        f"  Priority       : {decision.get('priority')}",
+        f"  Contact        : {format_teams(decision.get('teams', []))}",
+        f"  Action         : {decision.get('action')}",
+    ]
+    for reason in decision.get("reasons", []):
+        lines.append(f"  - {reason}")
+    if decision.get("needs_manual_review"):
+        lines.append("  ! Flagged for extra human checking")
+    final = record.get("final")
+    if final:
+        lines += [
+            THIN,
+            "ADMIN DECISION",
+            f"  Priority       : {final.get('priority')}",
+            f"  Contact        : {format_teams(final.get('teams', []))}",
+            f"  Reviewed by    : {final.get('reviewed_by')} at {final.get('reviewed_at')}",
+            f"  Note           : {final.get('note') or '-'}",
+        ]
+    return "\n".join(lines)
+
+
+def show_incident_detail(record: dict) -> None:
+    say()
+    say(LINE)
+    say(format_incident_detail(record))
+    say(LINE)
+
+
+def show_incident_table(incidents: list[dict], title: str) -> None:
+    say()
+    say(title)
+    if not incidents:
+        say("  (none)")
+        return
+    say(f"{'ID':<9}{'PRIORITY':<10}{'STATUS':<16}{'LOCATION':<21}CONTACT")
+    say(THIN)
+    for record in incidents:
+        say(format_incident_line(record))
+
+
+def show_pending_list(pending: list[dict], urgent_count: int) -> None:
+    """Shown only when the admin chooses to review: an alert line plus the pending table."""
+    if urgent_count:
+        say()
+        say(f"!!! ALERT: {urgent_count} urgent incident(s) need attention !!!")
+    show_incident_table(pending, "PENDING REVIEW (most urgent first)")
