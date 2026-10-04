@@ -314,4 +314,45 @@ def prompt_incident_id(valid_ids: list[str]) -> str:
             if matches:
                 return matches[0]
         show_error("That ID is not in the list shown.")
+<<<<<<< HEAD
 >>>>>>> 9efda7f (added admin menu, admin id and incident id prompts)
+=======
+
+    def prompt_review_action(can_approve: bool) -> str:
+    options = {}
+    if can_approve:
+        options["Approve recommendation and dispatch"] = "approve"
+    options["Override priority / teams"] = "override"
+    options["Reject report (no dispatch)"] = "reject"
+    options["Back"] = "back"
+    if not can_approve:
+        say("This incident has no AI-based rating, so it cannot be approved as-is.")
+    return options[prompt_choice("Your decision:", list(options))]
+
+
+def prompt_note(required: bool) -> str:
+    if required:
+        return prompt_field("Note explaining your decision", validate_note)
+    text = ask("Optional note (blank to skip): ")
+    while len(text) > MAX_NOTE_LENGTH:
+        show_error(f"Note must be at most {MAX_NOTE_LENGTH} characters.")
+        text = ask("Optional note (blank to skip): ")
+    return text
+
+
+def prompt_filters(statuses: list[str]) -> dict:
+    status = prompt_choice("Filter by status:", ["any"] + statuses)
+    return {"status": "" if status == "any" else status}
+
+
+def show_dispatch_notice(record: dict) -> None:
+    final = record.get("final", {})
+    say()
+    say(THIN)
+    say(f"{record.get('id')} marked '{record.get('status')}'.")
+    if final.get("teams"):
+        say(f"DISPATCH NOTICE -> {format_teams(final['teams'])} | Priority {final.get('priority')}")
+        say(f"Location: {record.get('location')}")
+        say(f"Action  : {final.get('action')}")
+    say(THIN)
+>>>>>>> fb6efee (added review action, note, status filter prompts and the dispatch notice)
