@@ -43,6 +43,18 @@ def show_heading(title: str) -> None:
     say(title)
     say(LINE)
 
+def prompt_mode() -> str:
+    """Ask which terminal this is when no command-line argument was given."""
+    choice = prompt_choice(
+        "Which terminal is this?", ["User (report hazards)", "Admin (review and dispatch incidents)"]
+    )
+    return "user" if choice.startswith("User") else "admin"
+
+
+def show_usage() -> None:
+    say("Usage: python main.py user   (report hazards)")
+    say("       python main.py admin  (review and dispatch incidents)")
+
 # --------------------------------------------------------------- validators
 # Each validator returns an error message, or "" when the text is acceptable.
 def validate_id(text: str) -> str:
@@ -300,16 +312,16 @@ def prompt_incident_id(valid_ids: list[str]) -> str:
                 return matches[0]
         show_error("That ID is not in the list shown.")
 
-    def prompt_review_action(can_approve: bool) -> str:
-    options = {}
-    if can_approve:
-        options["Approve recommendation and dispatch"] = "approve"
-    options["Override priority / teams"] = "override"
-    options["Reject report (no dispatch)"] = "reject"
-    options["Back"] = "back"
-    if not can_approve:
-        say("This incident has no AI-based rating, so it cannot be approved as-is.")
-    return options[prompt_choice("Your decision:", list(options))]
+def prompt_review_action(can_approve: bool) -> str:
+options = {}
+if can_approve:
+    options["Approve recommendation and dispatch"] = "approve"
+options["Override priority / teams"] = "override"
+options["Reject report (no dispatch)"] = "reject"
+options["Back"] = "back"
+if not can_approve:
+    say("This incident has no AI-based rating, so it cannot be approved as-is.")
+return options[prompt_choice("Your decision:", list(options))]
 
 
 def prompt_note(required: bool) -> str:
