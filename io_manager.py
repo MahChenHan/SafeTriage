@@ -16,6 +16,7 @@ MAX_NOTE_LENGTH = 300
 MIN_NAME_LENGTH = 2
 MAX_NAME_LENGTH = 50
 
+
 # ---------------------------------------------------------------- basic I/O
 def say(message: str = "") -> None:
     print(message)
@@ -43,6 +44,7 @@ def show_heading(title: str) -> None:
     say(title)
     say(LINE)
 
+
 def prompt_mode() -> str:
     """Ask which terminal this is when no command-line argument was given."""
     choice = prompt_choice(
@@ -54,6 +56,7 @@ def prompt_mode() -> str:
 def show_usage() -> None:
     say("Usage: python main.py user   (report hazards)")
     say("       python main.py admin  (review and dispatch incidents)")
+
 
 # --------------------------------------------------------------- validators
 # Each validator returns an error message, or "" when the text is acceptable.
@@ -72,6 +75,7 @@ def validate_name(text: str) -> str:
     if not MIN_NAME_LENGTH <= len(text) <= MAX_NAME_LENGTH:
         return f"Please input a valid name ({MIN_NAME_LENGTH}-{MAX_NAME_LENGTH} characters)."
     return ""
+
 
 def validate_location(text: str) -> str:
     if not text:
@@ -98,6 +102,7 @@ def validate_note(text: str) -> str:
         return f"Note must be at most {MAX_NOTE_LENGTH} characters."
     return ""
 
+
 def parse_number_list(text: str, maximum: int) -> list[int] | None:
     """Parse '1, 3' into [1, 3]. Returns None if any entry is invalid or the list is empty."""
     parts = [part for part in re.split(r"[,\s]+", text.strip()) if part]
@@ -112,7 +117,8 @@ def parse_number_list(text: str, maximum: int) -> list[int] | None:
             numbers.append(number)
     return numbers
 
-#Prompts
+
+# ------------------------------------------------------------------ prompts
 def prompt_field(label: str, validator: Callable[[str], str]) -> str:
     while True:
         text = ask(f"{label}: ")
@@ -120,6 +126,7 @@ def prompt_field(label: str, validator: Callable[[str], str]) -> str:
         if not problem:
             return text
         show_error(problem)
+
 
 def prompt_choice(label: str, options: list[str]) -> str:
     while True:
@@ -152,6 +159,7 @@ def confirm(question: str) -> bool:
             return False
         show_error("Please answer y or n.")
 
+
 # ------------------------------------------------------------ user terminal
 def collect_report() -> dict:
     show_heading("NEW HAZARD REPORT")
@@ -163,6 +171,7 @@ def collect_report() -> dict:
         "location": location,
         "description": description,
     }
+
 
 def show_user_welcome(record_count: int) -> None:
     show_heading("SAFETRIAGE - HAZARD REPORTING")
@@ -198,6 +207,7 @@ def show_submission(record: dict) -> None:
 # ----------------------------------------------------------- admin terminal
 def format_teams(teams: list[str]) -> str:
     return ", ".join(teams) if teams else "-"
+
 
 def format_incident_line(record: dict) -> str:
     shown = record.get("final") or record.get("decision") or {}
@@ -284,6 +294,7 @@ def show_pending_list(pending: list[dict], urgent_count: int) -> None:
         say(f"!!! ALERT: {urgent_count} urgent incident(s) need attention !!!")
     show_incident_table(pending, "PENDING REVIEW (most urgent first)")
 
+
 def admin_menu() -> str:
     options = {
         "Review a pending incident": "review",
@@ -312,16 +323,17 @@ def prompt_incident_id(valid_ids: list[str]) -> str:
                 return matches[0]
         show_error("That ID is not in the list shown.")
 
+
 def prompt_review_action(can_approve: bool) -> str:
-options = {}
-if can_approve:
-    options["Approve recommendation and dispatch"] = "approve"
-options["Override priority / teams"] = "override"
-options["Reject report (no dispatch)"] = "reject"
-options["Back"] = "back"
-if not can_approve:
-    say("This incident has no AI-based rating, so it cannot be approved as-is.")
-return options[prompt_choice("Your decision:", list(options))]
+    options = {}
+    if can_approve:
+        options["Approve recommendation and dispatch"] = "approve"
+    options["Override priority / teams"] = "override"
+    options["Reject report (no dispatch)"] = "reject"
+    options["Back"] = "back"
+    if not can_approve:
+        say("This incident has no AI-based rating, so it cannot be approved as-is.")
+    return options[prompt_choice("Your decision:", list(options))]
 
 
 def prompt_note(required: bool) -> str:

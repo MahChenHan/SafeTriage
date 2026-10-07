@@ -1,0 +1,13 @@
+# Secrets
+secrets_local.py
+.env
+
+# Python
+__pycache__/
+.pytest_cache/
+
+# Runtime data and logs
+data/*.json
+data/*.log
+data/*.tmp
+data/*.corrupt-*
