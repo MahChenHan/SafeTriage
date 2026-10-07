@@ -4,6 +4,8 @@ Builds the prompt, calls the Gemini API, and validates the JSON reply.
 There is NO domain logic here: this module never decides priority or routing.
 """
 import os
+import json
+import re
 
 DEFAULT_MODEL = "gemini-3.8-flash"
 
@@ -48,3 +50,18 @@ def build_prompt(report: dict) -> str:
         "Description: " + str(report.get("description", "")) + "\n"
         "</report>"
     )
+
+def parse_json_text(text: str) -> dict | None:
+    """Extract a JSON object from model text (tolerates markdown fences). None if impossible."""
+    if not isinstance(text, str):
+        return None
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(cleaned[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
