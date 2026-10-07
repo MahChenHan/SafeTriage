@@ -23,3 +23,18 @@ def severity_to_level(severity: int) -> int:
 def escalate(level: int, steps: int = 1) -> int:
     """Raise a priority index, capped at Critical."""
     return min(level + steps, len(PRIORITY_LEVELS) - 1)
+
+def determine_priority(analysis: dict) -> tuple[str, list[str]]:
+    """Apply the business rules. Returns (priority, reasons explaining each rule that fired)."""
+    hazards = set(analysis["hazard_types"])
+    severity = analysis["severity"]
+    injured = analysis["injury_present"]
+
+    level = severity_to_level(severity)
+    reasons = [f"Base level {PRIORITY_LEVELS[level]} from AI severity {severity}/5"]
+
+    if len(hazards) >= 2:
+        level = escalate(level)
+        reasons.append(f"Escalated one level: {len(hazards)} hazards present ({', '.join(sorted(hazards))})")
+
+    return PRIORITY_LEVELS[level], reasons
