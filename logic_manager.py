@@ -36,5 +36,9 @@ def determine_priority(analysis: dict) -> tuple[str, list[str]]:
     if len(hazards) >= 2:
         level = escalate(level)
         reasons.append(f"Escalated one level: {len(hazards)} hazards present ({', '.join(sorted(hazards))})")
+    if injured and level < LEVEL_HIGH:
+        level = LEVEL_HIGH
+        reasons.append("Raised to High: injury reported")
 
     return PRIORITY_LEVELS[level], reasons
+
