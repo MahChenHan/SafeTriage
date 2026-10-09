@@ -167,3 +167,14 @@ def sort_by_urgency(incidents: list[dict]) -> list[dict]:
         return (-URGENCY_RANK.get(shown.get("priority", ""), 0), record.get("reported_at", ""))
 
     return sorted(incidents, key=sort_key)
+
+def build_final_decision(priority: str, teams: list[str], note: str, admin_id: str, reviewed_at: str) -> dict:
+    """The admin-confirmed decision stored on a reviewed incident."""
+    return {
+        "priority": priority,
+        "teams": teams,
+        "action": determine_action(priority, teams),
+        "note": note,
+        "reviewed_by": admin_id,
+        "reviewed_at": reviewed_at,
+    }
