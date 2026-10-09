@@ -125,3 +125,13 @@ def validate_response(data: object) -> tuple[dict | None, str]:
         "summary": data["summary"].strip()[:300],
     }
     return clean, ""
+
+
+def call_gemini(prompt: str, model: str) -> str:
+    """The only function that touches the network. Uses the key that main.py links at startup."""
+    from google import genai  # imported here so tests run without the SDK or a key
+
+    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    interaction = client.interactions.create(model=model, input=prompt)
+    return interaction.output_text
+
