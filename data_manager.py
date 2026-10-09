@@ -107,3 +107,32 @@ def update_incident(path: str, incident_id: str, changes: dict) -> tuple[dict | 
                 return None, error
             return record, warning
     return None, f"Incident {incident_id} was not found."
+
+def filter_incidents(
+    incidents: list[dict],
+    status: str = "",
+    priority: str = "",
+    team: str = "",
+    keyword: str = "",
+) -> list[dict]:
+    """Filter records. An empty argument means 'do not filter on this'."""
+    results = []
+    needle = keyword.strip().lower()
+    for record in incidents:
+        shown = record.get("final") or record.get("decision") or {}
+        if status and record.get("status") != status:
+            continue
+        if priority and shown.get("priority") != priority:
+            continue
+        if team and team not in shown.get("teams", []):
+            continue
+        if needle:
+            summary = ((record.get("ai") or {}).get("analysis") or {}).get("summary", "")
+            haystack = " ".join(
+                str(part) for part in (record.get("id"), record.get("reporter_id"), record.get("location"),
+                                       record.get("description"), summary)
+            ).lower()
+            if needle not in haystack:
+                continue
+        results.append(record)
+    return results
