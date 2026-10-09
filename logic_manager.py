@@ -10,6 +10,10 @@ LEVEL_CRITICAL = 3
 MANY_PEOPLE_THRESHOLD = 5
 LOW_CONFIDENCE_THRESHOLD = 0.6
 
+OUTCOME_DISPATCH = "dispatch_recommended"
+OUTCOME_MANUAL = "manual_triage"
+OUTCOME_REJECTED = "rejected"
+
 ALL_TEAMS = (
     "Maintenance",
     "Electrical",
@@ -38,6 +42,8 @@ ACTIONS = {
     "Unrated": "Manual triage required: automated AI analysis was unavailable.",
     "Rejected": "No dispatch: not recognised as a workplace hazard.",
 }
+
+URGENCY_RANK = {"Critical": 4, "High": 3, "Unrated": 3, "Medium": 2, "Low": 1, "Rejected": 0}
 
 def severity_to_level(severity: int) -> int:
     """Map AI severity (1-5) to a base priority index."""
@@ -107,3 +113,68 @@ def determine_action(priority: str, teams: list[str]) -> str:
 def needs_manual_review(analysis: dict) -> bool:
     """Flag low-confidence AI output for extra human attention."""
     return analysis["confidence"] < LOW_CONFIDENCE_THRESHOLD
+
+def triage_incident(ai_result: dict) -> dict:
+    """Turn an ai_manager result into a decision dict (outcome, priority, teams, action, reasons)."""
+    if not ai_result.get("ok"):
+        reason = f"AI analysis unavailable ({ai_result.get('error_type', 'unknown')}): {ai_result.get('error', '')}"
+        return {
+            "outcome": OUTCOME_MANUAL,
+            "priority": "Unrated",
+            "teams": ["Workplace Safety"],
+            "action": determine_action("Unrated", []),
+            "notify_staff": True,
+            "needs_manual_review": True,
+            "reasons": [reason],
+        }
+
+    analysis = ai_result["analysis"]
+    if not analysis["is_hazard_report"]:
+        return {
+            "outcome": OUTCOME_REJECTED,
+            "priority": "Rejected",
+            "teams": [],
+            "action": determine_action("Rejected", []),
+            "notify_staff": False,
+            "needs_manual_review": False,
+            "reasons": ["AI judged this text is not a workplace hazard report"],
+        }
+
+    priority, reasons = determine_priority(analysis)
+    teams = determine_teams(analysis, priority)
+    manual = needs_manual_review(analysis)
+    if manual:
+        reasons.append(f"Low AI confidence ({analysis['confidence']:.2f}): human check advised")
+    return {
+        "outcome": OUTCOME_DISPATCH,
+        "priority": priority,
+        "teams": teams,
+        "action": determine_action(priority, teams),
+        "notify_staff": priority in ("High", "Critical") or manual,
+        "needs_manual_review": manual,
+        "reasons": reasons,
+    }
+
+def is_urgent(decision: dict) -> bool:
+    """True when an admin should look at this straight away."""
+    return decision.get("priority") in ("Critical", "High", "Unrated")
+
+
+def sort_by_urgency(incidents: list[dict]) -> list[dict]:
+    """Most urgent first; oldest first within the same urgency."""
+    def sort_key(record: dict) -> tuple[int, str]:
+        shown = record.get("final") or record.get("decision") or {}
+        return (-URGENCY_RANK.get(shown.get("priority", ""), 0), record.get("reported_at", ""))
+
+    return sorted(incidents, key=sort_key)
+
+def build_final_decision(priority: str, teams: list[str], note: str, admin_id: str, reviewed_at: str) -> dict:
+    """The admin-confirmed decision stored on a reviewed incident."""
+    return {
+        "priority": priority,
+        "teams": teams,
+        "action": determine_action(priority, teams),
+        "note": note,
+        "reviewed_by": admin_id,
+        "reviewed_at": reviewed_at,
+    }
