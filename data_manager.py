@@ -1,4 +1,5 @@
 import os
+import tempfile
 import json
 import logging
 from datetime import datetime, timezone
@@ -55,3 +56,21 @@ def load_incidents(path: str) -> tuple[list[dict], str]:
         warning = f"{len(data) - len(records)} malformed entries in the data file were ignored."
         logger.warning(warning)
     return records, warning
+
+def save_incidents(path: str, incidents: list[dict]) -> tuple[bool, str]:
+    """Atomically write all records. Returns (ok, error_message)."""
+    directory = os.path.dirname(path) or "."
+    temp_path = ""
+    try:
+        os.makedirs(directory, exist_ok=True)
+        handle_fd, temp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+        with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+            json.dump(incidents, handle, indent=2, ensure_ascii=False)
+        os.replace(temp_path, path)
+    except (OSError, TypeError, ValueError) as error:
+        logger.error("Could not save incidents: %s", error)
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+        return False, f"Could not save incidents: {error}"
+    return True, ""
+
