@@ -8,6 +8,7 @@ PRIORITY_LEVELS = ("Low", "Medium", "High", "Critical")
 LEVEL_HIGH = 2
 LEVEL_CRITICAL = 3
 MANY_PEOPLE_THRESHOLD = 5
+LOW_CONFIDENCE_THRESHOLD = 0.6
 
 ALL_TEAMS = (
     "Maintenance",
@@ -101,3 +102,8 @@ def determine_action(priority: str, teams: list[str]) -> str:
     """Recommended action text for a priority and team list."""
     template = ACTIONS.get(priority, ACTIONS["Unrated"])
     return template.format(teams=", ".join(teams))
+
+
+def needs_manual_review(analysis: dict) -> bool:
+    """Flag low-confidence AI output for extra human attention."""
+    return analysis["confidence"] < LOW_CONFIDENCE_THRESHOLD
