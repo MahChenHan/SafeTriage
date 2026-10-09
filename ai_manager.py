@@ -5,9 +5,15 @@ There is NO domain logic here: this module never decides priority or routing.
 """
 import os
 import json
+import logging
 import re
+import time
+
+logger = logging.getLogger("safetriage.ai")
 
 DEFAULT_MODEL = "gemini-3.8-flash"
+MAX_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 1.0
 
 HAZARD_TYPES = ("electrical", "fire", "structural", "water", "chemical", "slip_trip", "other")
 REQUIRED_KEYS = (
@@ -135,3 +141,48 @@ def call_gemini(prompt: str, model: str) -> str:
     interaction = client.interactions.create(model=model, input=prompt)
     return interaction.output_text
 
+
+def analyse_report(report: dict, call_fn=call_gemini, delay: float = RETRY_DELAY_SECONDS) -> dict:
+    """Send one report through the AI and return a result dict. Never raises.
+
+    Success: {"ok": True, "analysis": {...}, "model": str, "attempts": int, ...}
+    Failure: {"ok": False, "analysis": None, "error_type": "api_failure" | "malformed_response", ...}
+    """
+    prompt = build_prompt(report)
+    model = get_model_name()
+    error_type = "api_failure"
+    error_text = "no attempt made"
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            raw = call_fn(prompt, model)
+        except Exception as error:  # broad on purpose: an API problem must never crash the app
+            error_type = "api_failure"
+            error_text = f"{type(error).__name__}: {error}"
+            logger.warning("API call failed (attempt %d/%d): %s", attempt, MAX_ATTEMPTS, error_text)
+        else:
+            clean, problem = validate_response(parse_json_text(raw))
+            if clean is not None:
+                return {
+                    "ok": True,
+                    "analysis": clean,
+                    "model": model,
+                    "attempts": attempt,
+                    "error_type": "",
+                    "error": "",
+                }
+            error_type = "malformed_response"
+            error_text = problem
+            logger.warning("Malformed AI output (attempt %d/%d): %s", attempt, MAX_ATTEMPTS, problem)
+        if attempt < MAX_ATTEMPTS:
+            time.sleep(delay)
+
+    logger.error("AI analysis failed after %d attempts: %s", MAX_ATTEMPTS, error_text)
+    return {
+        "ok": False,
+        "analysis": None,
+        "model": model,
+        "attempts": MAX_ATTEMPTS,
+        "error_type": error_type,
+        "error": error_text,
+    }
