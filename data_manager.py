@@ -74,3 +74,65 @@ def save_incidents(path: str, incidents: list[dict]) -> tuple[bool, str]:
         return False, f"Could not save incidents: {error}"
     return True, ""
 
+def next_incident_id(incidents: list[dict]) -> str:
+    highest = 0
+    for record in incidents:
+        text = str(record.get("id", ""))
+        if text.startswith("INC-") and text[4:].isdecimal():
+            highest = max(highest, int(text[4:]))
+    return f"INC-{highest + 1:04d}"
+
+
+def add_incident(path: str, record: dict) -> tuple[dict | None, str]:
+    """Append a new record (id and timestamp added). Returns (saved_record, message)."""
+    incidents, warning = load_incidents(path)
+    new_record = dict(record)
+    new_record["id"] = next_incident_id(incidents)
+    new_record.setdefault("reported_at", current_timestamp())
+    incidents.append(new_record)
+    saved, error = save_incidents(path, incidents)
+    if not saved:
+        return None, error
+    return new_record, warning
+
+def update_incident(path: str, incident_id: str, changes: dict) -> tuple[dict | None, str]:
+    """Merge changes into one record. Returns (updated_record, message)."""
+    incidents, warning = load_incidents(path)
+    for record in incidents:
+        if record.get("id") == incident_id:
+            record.update(changes)
+            record["updated_at"] = current_timestamp()
+            saved, error = save_incidents(path, incidents)
+            if not saved:
+                return None, error
+            return record, warning
+    return None, f"Incident {incident_id} was not found."
+
+def filter_incidents(
+    incidents: list[dict],
+    status: str = "",
+    priority: str = "",
+    team: str = "",
+    keyword: str = "",
+) -> list[dict]:
+    """Filter records. An empty argument means 'do not filter on this'."""
+    results = []
+    needle = keyword.strip().lower()
+    for record in incidents:
+        shown = record.get("final") or record.get("decision") or {}
+        if status and record.get("status") != status:
+            continue
+        if priority and shown.get("priority") != priority:
+            continue
+        if team and team not in shown.get("teams", []):
+            continue
+        if needle:
+            summary = ((record.get("ai") or {}).get("analysis") or {}).get("summary", "")
+            haystack = " ".join(
+                str(part) for part in (record.get("id"), record.get("reporter_id"), record.get("location"),
+                                       record.get("description"), summary)
+            ).lower()
+            if needle not in haystack:
+                continue
+        results.append(record)
+    return results
