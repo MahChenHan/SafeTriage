@@ -43,6 +43,8 @@ ACTIONS = {
     "Rejected": "No dispatch: not recognised as a workplace hazard.",
 }
 
+URGENCY_RANK = {"Critical": 4, "High": 3, "Unrated": 3, "Medium": 2, "Low": 1, "Rejected": 0}
+
 def severity_to_level(severity: int) -> int:
     """Map AI severity (1-5) to a base priority index."""
     if severity >= 5:
@@ -152,3 +154,16 @@ def triage_incident(ai_result: dict) -> dict:
         "needs_manual_review": manual,
         "reasons": reasons,
     }
+
+def is_urgent(decision: dict) -> bool:
+    """True when an admin should look at this straight away."""
+    return decision.get("priority") in ("Critical", "High", "Unrated")
+
+
+def sort_by_urgency(incidents: list[dict]) -> list[dict]:
+    """Most urgent first; oldest first within the same urgency."""
+    def sort_key(record: dict) -> tuple[int, str]:
+        shown = record.get("final") or record.get("decision") or {}
+        return (-URGENCY_RANK.get(shown.get("priority", ""), 0), record.get("reported_at", ""))
+
+    return sorted(incidents, key=sort_key)
