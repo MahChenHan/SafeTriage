@@ -44,3 +44,26 @@ def build_record(report: dict, ai_result: dict, decision: dict) -> dict:
         "decision": decision,
         "status": status,
     }
+
+# ------------------------------------------------------------- user terminal
+def run_user_mode(path: str) -> None:
+    records, warning = data_manager.load_incidents(path)
+    io_manager.show_user_welcome(len(records))
+    if warning:
+        io_manager.show_warning(warning)
+
+    while True:
+        report = io_manager.collect_report()
+        io_manager.show_message("\nAnalysing your report with AI, please wait...")
+        ai_result = ai_manager.analyse_report(report)
+        decision = logic_manager.triage_incident(ai_result)
+        saved, message = data_manager.add_incident(path, build_record(report, ai_result, decision))
+        if saved is None:
+            io_manager.show_error(f"{message} Your report was NOT saved. Please try again.")
+        else:
+            if message:
+                io_manager.show_warning(message)
+            io_manager.show_submission(saved)
+        if not io_manager.confirm("\nReport another hazard?"):
+            break
+    io_manager.show_message("Thank you. Stay safe.")
