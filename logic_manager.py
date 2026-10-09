@@ -46,6 +46,9 @@ def determine_priority(analysis: dict) -> tuple[str, list[str]]:
     if {"electrical", "water"} <= hazards and severity >= 3 and level < LEVEL_CRITICAL:
         level = LEVEL_CRITICAL
         reasons.append("Raised to Critical: electrical + water hazard at severity 3 or above")
+    if "fire" in hazards and injured and level < LEVEL_CRITICAL:
+        level = LEVEL_CRITICAL
+        reasons.append("Raised to Critical: fire hazard with injury")
 
     return PRIORITY_LEVELS[level], reasons
 
