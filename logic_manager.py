@@ -9,6 +9,27 @@ LEVEL_HIGH = 2
 LEVEL_CRITICAL = 3
 MANY_PEOPLE_THRESHOLD = 5
 
+ALL_TEAMS = (
+    "Maintenance",
+    "Electrical",
+    "Fire Safety",
+    "Workplace Safety",
+    "Security",
+    "Emergency Response",
+)
+
+TEAM_BY_HAZARD = {
+    "fire": "Fire Safety",
+    "electrical": "Electrical",
+    "chemical": "Workplace Safety",
+    "structural": "Maintenance",
+    "water": "Maintenance",
+    "slip_trip": "Maintenance",
+    "other": "Workplace Safety",
+}
+HAZARD_PRECEDENCE = ("fire", "electrical", "chemical", "structural", "water", "slip_trip", "other")
+
+
 
 def severity_to_level(severity: int) -> int:
     """Map AI severity (1-5) to a base priority index."""
@@ -52,3 +73,16 @@ def determine_priority(analysis: dict) -> tuple[str, list[str]]:
 
     return PRIORITY_LEVELS[level], reasons
 
+def determine_teams(analysis: dict, priority: str) -> list[str]:
+    """Ordered, de-duplicated list of teams to contact."""
+    teams: list[str] = []
+    if analysis["injury_present"] and priority == "Critical":
+        teams.append("Emergency Response")
+    for hazard in HAZARD_PRECEDENCE:
+        if hazard in analysis["hazard_types"]:
+            team = TEAM_BY_HAZARD[hazard]
+            if team not in teams:
+                teams.append(team)
+    if not teams:
+        teams.append("Workplace Safety")
+    return teams
