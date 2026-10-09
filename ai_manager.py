@@ -76,3 +76,52 @@ def is_whole_number(value: object) -> bool:
 
 def is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def validate_response(data: object) -> tuple[dict | None, str]:
+    """Check the AI reply against the schema.
+
+    Returns (clean_dict, "") when valid, or (None, reason) when malformed.
+    """
+    if not isinstance(data, dict):
+        return None, "response is not a JSON object"
+    missing = [key for key in REQUIRED_KEYS if key not in data]
+    if missing:
+        return None, "missing keys: " + ", ".join(missing)
+
+    if not isinstance(data["is_hazard_report"], bool):
+        return None, "is_hazard_report must be true or false"
+    if not isinstance(data["hazard_types"], list):
+        return None, "hazard_types must be a list"
+
+    hazards: list[str] = []
+    for item in data["hazard_types"]:
+        if not isinstance(item, str) or item.strip().lower() not in HAZARD_TYPES:
+            return None, f"unknown hazard type: {item!r}"
+        name = item.strip().lower()
+        if name not in hazards:
+            hazards.append(name)
+    if data["is_hazard_report"] and not hazards:
+        return None, "hazard_types is empty for a hazard report"
+
+    if not is_whole_number(data["severity"]) or not 1 <= int(data["severity"]) <= 5:
+        return None, "severity must be a whole number from 1 to 5"
+    if not isinstance(data["injury_present"], bool):
+        return None, "injury_present must be true or false"
+    if not is_whole_number(data["people_exposed"]) or int(data["people_exposed"]) < 0:
+        return None, "people_exposed must be a whole number >= 0"
+    if not is_number(data["confidence"]) or not 0.0 <= float(data["confidence"]) <= 1.0:
+        return None, "confidence must be a number from 0.0 to 1.0"
+    if not isinstance(data["summary"], str):
+        return None, "summary must be text"
+
+    clean = {
+        "is_hazard_report": data["is_hazard_report"],
+        "hazard_types": hazards,
+        "severity": int(data["severity"]),
+        "injury_present": data["injury_present"],
+        "people_exposed": int(data["people_exposed"]),
+        "confidence": float(data["confidence"]),
+        "summary": data["summary"].strip()[:300],
+    }
+    return clean, ""
