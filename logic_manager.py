@@ -10,6 +10,10 @@ LEVEL_CRITICAL = 3
 MANY_PEOPLE_THRESHOLD = 5
 LOW_CONFIDENCE_THRESHOLD = 0.6
 
+OUTCOME_DISPATCH = "dispatch_recommended"
+OUTCOME_MANUAL = "manual_triage"
+OUTCOME_REJECTED = "rejected"
+
 ALL_TEAMS = (
     "Maintenance",
     "Electrical",
