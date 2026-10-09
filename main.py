@@ -29,3 +29,18 @@ def setup_logging(data_dir: str) -> None:
         )
     except OSError:
         logging.disable(logging.CRITICAL)
+
+def build_record(report: dict, ai_result: dict, decision: dict) -> dict:
+    """Combine report + AI result + logic decision into one storable record."""
+    if decision["outcome"] == logic_manager.OUTCOME_REJECTED:
+        status = data_manager.STATUS_AUTO_REJECTED
+    else:
+        status = data_manager.STATUS_PENDING
+    return {
+        "reporter_id": report["reporter_id"],
+        "location": report["location"],
+        "description": report["description"],
+        "ai": ai_result,
+        "decision": decision,
+        "status": status,
+    }
