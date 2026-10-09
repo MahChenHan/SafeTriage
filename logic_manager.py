@@ -7,6 +7,7 @@ and a recommended action. No printing, no file access, no API calls.
 PRIORITY_LEVELS = ("Low", "Medium", "High", "Critical")
 LEVEL_HIGH = 2
 LEVEL_CRITICAL = 3
+
 MANY_PEOPLE_THRESHOLD = 5
 LOW_CONFIDENCE_THRESHOLD = 0.6
 
@@ -44,6 +45,7 @@ ACTIONS = {
 }
 
 URGENCY_RANK = {"Critical": 4, "High": 3, "Unrated": 3, "Medium": 2, "Low": 1, "Rejected": 0}
+
 
 def severity_to_level(severity: int) -> int:
     """Map AI severity (1-5) to a base priority index."""
@@ -114,6 +116,7 @@ def needs_manual_review(analysis: dict) -> bool:
     """Flag low-confidence AI output for extra human attention."""
     return analysis["confidence"] < LOW_CONFIDENCE_THRESHOLD
 
+
 def triage_incident(ai_result: dict) -> dict:
     """Turn an ai_manager result into a decision dict (outcome, priority, teams, action, reasons)."""
     if not ai_result.get("ok"):
@@ -155,6 +158,7 @@ def triage_incident(ai_result: dict) -> dict:
         "reasons": reasons,
     }
 
+
 def is_urgent(decision: dict) -> bool:
     """True when an admin should look at this straight away."""
     return decision.get("priority") in ("Critical", "High", "Unrated")
@@ -167,6 +171,7 @@ def sort_by_urgency(incidents: list[dict]) -> list[dict]:
         return (-URGENCY_RANK.get(shown.get("priority", ""), 0), record.get("reported_at", ""))
 
     return sorted(incidents, key=sort_key)
+
 
 def build_final_decision(priority: str, teams: list[str], note: str, admin_id: str, reviewed_at: str) -> dict:
     """The admin-confirmed decision stored on a reviewed incident."""
