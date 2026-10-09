@@ -3,9 +3,9 @@
 Builds the prompt, calls the Gemini API, and validates the JSON reply.
 There is NO domain logic here: this module never decides priority or routing.
 """
-import os
 import json
 import logging
+import os
 import re
 import time
 
@@ -26,9 +26,11 @@ REQUIRED_KEYS = (
     "summary",
 )
 
+
 def get_model_name() -> str:
     """Model name comes from GEMINI_MODEL, falling back to the default."""
     return os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
+
 
 def build_prompt(report: dict) -> str:
     """Turn a user report into a prompt that demands a strict JSON reply."""
@@ -57,6 +59,7 @@ def build_prompt(report: dict) -> str:
         "</report>"
     )
 
+
 def parse_json_text(text: str) -> dict | None:
     """Extract a JSON object from model text (tolerates markdown fences). None if impossible."""
     if not isinstance(text, str):
@@ -71,6 +74,7 @@ def parse_json_text(text: str) -> dict | None:
     except json.JSONDecodeError:
         return None
     return data if isinstance(data, dict) else None
+
 
 def is_whole_number(value: object) -> bool:
     if isinstance(value, bool):
