@@ -29,7 +29,14 @@ TEAM_BY_HAZARD = {
 }
 HAZARD_PRECEDENCE = ("fire", "electrical", "chemical", "structural", "water", "slip_trip", "other")
 
-
+ACTIONS = {
+    "Critical": "IMMEDIATE dispatch to {teams}. Alert safety staff now.",
+    "High": "Dispatch {teams} as soon as possible (target: within 1 hour).",
+    "Medium": "Assign {teams} to attend today.",
+    "Low": "Log for {teams}; handle at the next routine visit.",
+    "Unrated": "Manual triage required: automated AI analysis was unavailable.",
+    "Rejected": "No dispatch: not recognised as a workplace hazard.",
+}
 
 def severity_to_level(severity: int) -> int:
     """Map AI severity (1-5) to a base priority index."""
@@ -45,6 +52,7 @@ def severity_to_level(severity: int) -> int:
 def escalate(level: int, steps: int = 1) -> int:
     """Raise a priority index, capped at Critical."""
     return min(level + steps, len(PRIORITY_LEVELS) - 1)
+
 
 def determine_priority(analysis: dict) -> tuple[str, list[str]]:
     """Apply the business rules. Returns (priority, reasons explaining each rule that fired)."""
@@ -73,6 +81,7 @@ def determine_priority(analysis: dict) -> tuple[str, list[str]]:
 
     return PRIORITY_LEVELS[level], reasons
 
+
 def determine_teams(analysis: dict, priority: str) -> list[str]:
     """Ordered, de-duplicated list of teams to contact."""
     teams: list[str] = []
@@ -86,3 +95,9 @@ def determine_teams(analysis: dict, priority: str) -> list[str]:
     if not teams:
         teams.append("Workplace Safety")
     return teams
+
+
+def determine_action(priority: str, teams: list[str]) -> str:
+    """Recommended action text for a priority and team list."""
+    template = ACTIONS.get(priority, ACTIONS["Unrated"])
+    return template.format(teams=", ".join(teams))
