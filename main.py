@@ -18,3 +18,14 @@ import logic_manager
 # Gemini API key, linked automatically at startup.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+def setup_logging(data_dir: str) -> None:
+    """Send logs to a file (never the terminal, which io_manager owns)."""
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        logging.basicConfig(
+            filename=os.path.join(data_dir, "safetriage.log"),
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
+    except OSError:
+        logging.disable(logging.CRITICAL)
