@@ -94,3 +94,16 @@ def add_incident(path: str, record: dict) -> tuple[dict | None, str]:
     if not saved:
         return None, error
     return new_record, warning
+
+def update_incident(path: str, incident_id: str, changes: dict) -> tuple[dict | None, str]:
+    """Merge changes into one record. Returns (updated_record, message)."""
+    incidents, warning = load_incidents(path)
+    for record in incidents:
+        if record.get("id") == incident_id:
+            record.update(changes)
+            record["updated_at"] = current_timestamp()
+            saved, error = save_incidents(path, incidents)
+            if not saved:
+                return None, error
+            return record, warning
+    return None, f"Incident {incident_id} was not found."
