@@ -86,3 +86,22 @@ def review_flow(path: str, admin_id: str) -> None:
         return
     record = next(item for item in pending if item["id"] == incident_id)
     io_manager.show_incident_detail(record)
+
+    # ------------------------------------------------------------ admin terminal
+def review_flow(path: str, admin_id: str) -> None:
+    records, warning = data_manager.load_incidents(path)
+    if warning:
+        io_manager.show_warning(warning)
+    pending = logic_manager.sort_by_urgency(
+        data_manager.filter_incidents(records, status=data_manager.STATUS_PENDING)
+    )
+    if not pending:
+        io_manager.show_message("No incidents are awaiting review.")
+        return
+    urgent = [record for record in pending if logic_manager.is_urgent(record["decision"])]
+    io_manager.show_pending_list(pending, len(urgent))
+    incident_id = io_manager.prompt_incident_id([record["id"] for record in pending])
+    if not incident_id:
+        return
+    record = next(item for item in pending if item["id"] == incident_id)
+    io_manager.show_incident_detail(record)
