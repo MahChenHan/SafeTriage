@@ -1,12 +1,25 @@
-import os
-import tempfile
+"""Data layer for SafeTriage: JSON persistence shared by the user and admin terminals.
+
+Every write re-reads the file first, so two terminals working at once do not
+overwrite each other's records. Writes are atomic (temp file + rename), and a
+missing or corrupt file never crashes the program.
+"""
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime, timezone
 
 logger = logging.getLogger("safetriage.data")
 
 INCIDENTS_FILENAME = "incidents.json"
+
+STATUS_PENDING = "pending_review"
+STATUS_APPROVED = "approved"
+STATUS_OVERRIDDEN = "overridden"
+STATUS_REJECTED = "rejected"
+STATUS_AUTO_REJECTED = "auto_rejected"
+STATUSES = (STATUS_PENDING, STATUS_APPROVED, STATUS_OVERRIDDEN, STATUS_REJECTED, STATUS_AUTO_REJECTED)
 
 
 def get_data_dir() -> str:
@@ -16,15 +29,10 @@ def get_data_dir() -> str:
 def get_incidents_path(data_dir: str) -> str:
     return os.path.join(data_dir, INCIDENTS_FILENAME)
 
-STATUS_PENDING = "pending_review"
-STATUS_APPROVED = "approved"
-STATUS_OVERRIDDEN = "overridden"
-STATUS_REJECTED = "rejected"
-STATUS_AUTO_REJECTED = "auto_rejected"
-STATUSES = (STATUS_PENDING, STATUS_APPROVED, STATUS_OVERRIDDEN, STATUS_REJECTED, STATUS_AUTO_REJECTED)
 
 def current_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
 
 def quarantine_corrupt_file(path: str, reason: str) -> str:
     """Move a corrupt data file aside so it is never overwritten. Returns a warning message."""
@@ -57,6 +65,7 @@ def load_incidents(path: str) -> tuple[list[dict], str]:
         logger.warning(warning)
     return records, warning
 
+
 def save_incidents(path: str, incidents: list[dict]) -> tuple[bool, str]:
     """Atomically write all records. Returns (ok, error_message)."""
     directory = os.path.dirname(path) or "."
@@ -73,6 +82,7 @@ def save_incidents(path: str, incidents: list[dict]) -> tuple[bool, str]:
             os.remove(temp_path)
         return False, f"Could not save incidents: {error}"
     return True, ""
+
 
 def next_incident_id(incidents: list[dict]) -> str:
     highest = 0
@@ -95,6 +105,7 @@ def add_incident(path: str, record: dict) -> tuple[dict | None, str]:
         return None, error
     return new_record, warning
 
+
 def update_incident(path: str, incident_id: str, changes: dict) -> tuple[dict | None, str]:
     """Merge changes into one record. Returns (updated_record, message)."""
     incidents, warning = load_incidents(path)
@@ -107,6 +118,7 @@ def update_incident(path: str, incident_id: str, changes: dict) -> tuple[dict | 
                 return None, error
             return record, warning
     return None, f"Incident {incident_id} was not found."
+
 
 def filter_incidents(
     incidents: list[dict],

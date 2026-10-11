@@ -140,7 +140,6 @@ def run_admin_mode(path: str) -> None:
     io_manager.show_admin_welcome(len(records), len(pending))
     if warning:
         io_manager.show_warning(warning)
-def run_admin_mode(path: str) -> None:
     admin_id = io_manager.prompt_admin_id()
     while True:
         choice = io_manager.admin_menu()
@@ -152,7 +151,6 @@ def run_admin_mode(path: str) -> None:
             break
     io_manager.show_message("Admin session ended.")
 
-    io_manager.show_message("Admin session ended.")  
 
 def main() -> int:
     if GEMINI_API_KEY:
