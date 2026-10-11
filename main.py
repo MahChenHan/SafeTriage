@@ -77,10 +77,18 @@ def run_user_mode(path: str) -> None:
 
 
 # ------------------------------------------------------------ admin terminal
-def review_flow(path: str, admin_id: str) -> None:
+def load_usable_incidents(path: str) -> list[dict]:
+    """Load records for the admin screens, skipping damaged ones (with a warning)."""
     records, warning = data_manager.load_incidents(path)
-    if warning:
-        io_manager.show_warning(warning)
+    usable, skipped_warning = data_manager.split_usable_incidents(records)
+    for message in (warning, skipped_warning):
+        if message:
+            io_manager.show_warning(message)
+    return usable
+
+
+def review_flow(path: str, admin_id: str) -> None:
+    records = load_usable_incidents(path)
     pending = logic_manager.sort_by_urgency(
         data_manager.filter_incidents(records, status=data_manager.STATUS_PENDING)
     )
@@ -122,9 +130,7 @@ def review_flow(path: str, admin_id: str) -> None:
 
 
 def history_flow(path: str) -> None:
-    records, warning = data_manager.load_incidents(path)
-    if warning:
-        io_manager.show_warning(warning)
+    records = load_usable_incidents(path)
     filters = io_manager.prompt_filters(list(data_manager.STATUSES))
     results = logic_manager.sort_by_urgency(data_manager.filter_incidents(records, **filters))
     io_manager.show_incident_table(results, f"{len(results)} MATCHING INCIDENT(S)")
@@ -136,10 +142,12 @@ def history_flow(path: str) -> None:
 
 def run_admin_mode(path: str) -> None:
     records, warning = data_manager.load_incidents(path)
-    pending = data_manager.filter_incidents(records, status=data_manager.STATUS_PENDING)
-    io_manager.show_admin_welcome(len(records), len(pending))
-    if warning:
-        io_manager.show_warning(warning)
+    usable, skipped_warning = data_manager.split_usable_incidents(records)
+    pending = data_manager.filter_incidents(usable, status=data_manager.STATUS_PENDING)
+    io_manager.show_admin_welcome(len(usable), len(pending))
+    for message in (warning, skipped_warning):
+        if message:
+            io_manager.show_warning(message)
     admin_id = io_manager.prompt_admin_id()
     while True:
         choice = io_manager.admin_menu()
