@@ -36,7 +36,7 @@ def setup_logging(data_dir: str) -> None:
         logging.disable(logging.CRITICAL)
 
 
-def build_record(report: dict, ai_result: dict, decision: dict) -> dict:
+def build_record(report: dict, ai_result: dict, decision: dict, reported_at: str) -> dict:
     """Combine report + AI result + logic decision into one storable record."""
     if decision["outcome"] == logic_manager.OUTCOME_REJECTED:
         status = data_manager.STATUS_AUTO_REJECTED
@@ -49,10 +49,21 @@ def build_record(report: dict, ai_result: dict, decision: dict) -> dict:
         "ai": ai_result,
         "decision": decision,
         "status": status,
+        "reported_at": reported_at,
     }
 
 
 # ------------------------------------------------------------- user terminal
+def load_open_incidents(path: str) -> tuple[list[dict], str]:
+    """Pending incidents used for the duplicate check. Returns (incidents, file_warning).
+
+    Damaged records are silently ignored here; the admin terminal reports them.
+    """
+    records, warning = data_manager.load_incidents(path)
+    usable, _ = data_manager.split_usable_incidents(records)
+    return data_manager.filter_incidents(usable, status=data_manager.STATUS_PENDING), warning
+
+
 def run_user_mode(path: str) -> None:
     records, warning = data_manager.load_incidents(path)
     io_manager.show_user_welcome(len(records))
@@ -61,14 +72,24 @@ def run_user_mode(path: str) -> None:
 
     while True:
         report = io_manager.collect_report()
+        reported_at = data_manager.current_timestamp()
         io_manager.show_message("\nAnalysing your report with AI, please wait...")
         ai_result = ai_manager.analyse_report(report)
         decision = logic_manager.triage_incident(ai_result)
-        saved, message = data_manager.add_incident(path, build_record(report, ai_result, decision))
+
+        open_incidents, load_warning = load_open_incidents(path)
+        if load_warning:
+            io_manager.show_warning(load_warning)
+        duplicate_id, duplicate_reason = logic_manager.find_duplicate(
+            report["location"], ai_result["analysis"], reported_at, open_incidents
+        )
+        decision = logic_manager.flag_duplicate(decision, duplicate_id, duplicate_reason)
+
+        saved, message = data_manager.add_incident(path, build_record(report, ai_result, decision, reported_at))
         if saved is None:
             io_manager.show_error(f"{message} Your report was NOT saved. Please try again.")
         else:
-            if message:
+            if message and message != load_warning:
                 io_manager.show_warning(message)
             io_manager.show_submission(saved)
         if not io_manager.confirm("\nReport another hazard?"):

@@ -3,6 +3,7 @@
 Pure functions that turn validated AI output into a priority, teams to contact,
 and a recommended action. No printing, no file access, no API calls.
 """
+from datetime import datetime
 
 PRIORITY_LEVELS = ("Low", "Medium", "High", "Critical")
 LEVEL_HIGH = 2
@@ -10,6 +11,7 @@ LEVEL_CRITICAL = 3
 
 MANY_PEOPLE_THRESHOLD = 5
 LOW_CONFIDENCE_THRESHOLD = 0.6
+DUPLICATE_WINDOW_HOURS = 4
 
 OUTCOME_DISPATCH = "dispatch_recommended"
 OUTCOME_MANUAL = "manual_triage"
@@ -160,6 +162,70 @@ def triage_incident(ai_result: dict) -> dict:
         "needs_manual_review": manual,
         "reasons": reasons,
     }
+
+
+def normalise_location(text: str) -> str:
+    """'  Lab 3 ' and 'lab   3' count as the same place."""
+    return " ".join(str(text).lower().split())
+
+
+def hours_between(first: str, second: str) -> float | None:
+    """Absolute gap in hours between two ISO timestamps, or None if either is unreadable."""
+    try:
+        gap = datetime.fromisoformat(second) - datetime.fromisoformat(first)
+    except (TypeError, ValueError):
+        return None
+    return abs(gap.total_seconds()) / 3600
+
+
+def find_duplicate(location: str, analysis: dict | None, reported_at: str,
+                   open_incidents: list[dict]) -> tuple[str, str]:
+    """Multi-condition duplicate rule. Returns (incident_id, reason), or ("", "") if none.
+
+    A new report is a likely duplicate of an open incident when ALL of these hold:
+      - the new report is a real hazard report (AI analysis available)
+      - same location (ignoring case and extra spaces)
+      - at least one hazard type in common
+      - reported within DUPLICATE_WINDOW_HOURS of each other
+    The most recent matching incident is returned.
+    """
+    if not analysis or not analysis["is_hazard_report"]:
+        return "", ""
+    place = normalise_location(location)
+    hazards = set(analysis["hazard_types"])
+    best_id, best_reason, best_time = "", "", ""
+
+    for record in open_incidents:
+        if normalise_location(record.get("location", "")) != place:
+            continue
+        other = (record.get("ai") or {}).get("analysis")
+        if not other:
+            continue
+        shared = hazards & set(other["hazard_types"])
+        if not shared:
+            continue
+        gap = hours_between(record.get("reported_at", ""), reported_at)
+        if gap is None or gap > DUPLICATE_WINDOW_HOURS:
+            continue
+        if record.get("reported_at", "") >= best_time:
+            best_id = record.get("id", "")
+            best_time = record.get("reported_at", "")
+            best_reason = (
+                f"Possible duplicate of {best_id}: same location, shared hazard "
+                f"({', '.join(sorted(shared))}), reported {round(gap * 60)} min apart"
+            )
+    return best_id, best_reason
+
+
+def flag_duplicate(decision: dict, duplicate_id: str, reason: str) -> dict:
+    """Mark a decision as a possible duplicate. Priority is unchanged: a human decides."""
+    if not duplicate_id:
+        return decision
+    flagged = dict(decision)
+    flagged["duplicate_of"] = duplicate_id
+    flagged["needs_manual_review"] = True
+    flagged["reasons"] = list(decision.get("reasons", [])) + [reason]
+    return flagged
 
 
 def is_urgent(decision: dict) -> bool:
