@@ -201,6 +201,9 @@ def show_submission(record: dict) -> None:
             say("Safety staff have been notified and will review this report.")
         else:
             say("Safety staff will review this report.")
+        if decision.get("duplicate_of"):
+            say(f"Note: this looks like the same hazard as {decision['duplicate_of']}, "
+                "which is already awaiting review. Staff will link the two.")
     say(THIN)
 
 
@@ -211,12 +214,14 @@ def format_teams(teams: list[str]) -> str:
 
 def format_incident_line(record: dict) -> str:
     shown = record.get("final") or record.get("decision") or {}
+    duplicate_of = (record.get("decision") or {}).get("duplicate_of")
     return (
         f"{str(record.get('id', '?')):<9}"
         f"{str(shown.get('priority', '?')):<10}"
         f"{str(record.get('status', '?')):<16}"
         f"{str(record.get('location', ''))[:20]:<21}"
         f"{format_teams(shown.get('teams', []))}"
+        + (f"  [dup of {duplicate_of}]" if duplicate_of else "")
     )
 
 
@@ -255,6 +260,8 @@ def format_incident_detail(record: dict) -> str:
         lines.append(f"  - {reason}")
     if decision.get("needs_manual_review"):
         lines.append("  ! Flagged for extra human checking")
+    if decision.get("duplicate_of"):
+        lines.append(f"  ! Possible duplicate of {decision['duplicate_of']} (reject with a note if it is the same hazard)")
     final = record.get("final")
     if final:
         lines += [
