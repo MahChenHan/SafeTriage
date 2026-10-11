@@ -21,6 +21,9 @@ STATUS_REJECTED = "rejected"
 STATUS_AUTO_REJECTED = "auto_rejected"
 STATUSES = (STATUS_PENDING, STATUS_APPROVED, STATUS_OVERRIDDEN, STATUS_REJECTED, STATUS_AUTO_REJECTED)
 
+# Fields a stored AI analysis must have for the record to be displayed safely
+ANALYSIS_KEYS = ("hazard_types", "severity", "injury_present", "people_exposed", "confidence", "summary")
+
 
 def get_data_dir() -> str:
     return os.environ.get("DATA_DIR", "data")
@@ -64,6 +67,62 @@ def load_incidents(path: str) -> tuple[list[dict], str]:
         warning = f"{len(data) - len(records)} malformed entries in the data file were ignored."
         logger.warning(warning)
     return records, warning
+
+
+def is_valid_decision(decision: object) -> bool:
+    """A decision/final block needs a text priority and a list of team names."""
+    if not isinstance(decision, dict) or not isinstance(decision.get("priority"), str):
+        return False
+    teams = decision.get("teams")
+    return isinstance(teams, list) and all(isinstance(team, str) for team in teams)
+
+
+def is_valid_analysis(analysis: object) -> bool:
+    """A stored AI analysis is either None (AI was unavailable) or has every field the display uses."""
+    if analysis is None:
+        return True
+    if not isinstance(analysis, dict) or any(key not in analysis for key in ANALYSIS_KEYS):
+        return False
+    hazards = analysis["hazard_types"]
+    confidence = analysis["confidence"]
+    return (
+        isinstance(hazards, list)
+        and all(isinstance(hazard, str) for hazard in hazards)
+        and isinstance(confidence, (int, float))
+        and not isinstance(confidence, bool)
+    )
+
+
+def is_usable_record(record: dict) -> bool:
+    """True when a record has everything the review and history screens rely on."""
+    if not isinstance(record.get("id"), str) or not isinstance(record.get("status"), str):
+        return False
+    if not isinstance(record.get("reported_at", ""), str):
+        return False
+    if not is_valid_decision(record.get("decision")):
+        return False
+    final = record.get("final")
+    if final is not None and not is_valid_decision(final):
+        return False
+    ai = record.get("ai")
+    if ai is None:
+        return True
+    return isinstance(ai, dict) and is_valid_analysis(ai.get("analysis"))
+
+
+def split_usable_incidents(incidents: list[dict]) -> tuple[list[dict], str]:
+    """Keep only records that are safe to display. Returns (usable, warning).
+
+    Damaged records are only hidden from the screens, never deleted: they stay
+    in the file untouched so nothing is lost and they can be repaired by hand.
+    """
+    usable = [record for record in incidents if is_usable_record(record)]
+    skipped = len(incidents) - len(usable)
+    warning = ""
+    if skipped:
+        warning = f"{skipped} damaged incident(s) were skipped. They are left unchanged in the data file."
+        logger.warning(warning)
+    return usable, warning
 
 
 def save_incidents(path: str, incidents: list[dict]) -> tuple[bool, str]:
