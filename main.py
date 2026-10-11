@@ -131,7 +131,7 @@ def review_flow(path: str, admin_id: str) -> None:
 
 def history_flow(path: str) -> None:
     records = load_usable_incidents(path)
-    filters = io_manager.prompt_filters(list(data_manager.STATUSES))
+    filters = io_manager.prompt_filters(list(data_manager.STATUSES), list(logic_manager.ALL_PRIORITIES))
     results = logic_manager.sort_by_urgency(data_manager.filter_incidents(records, **filters))
     io_manager.show_incident_table(results, f"{len(results)} MATCHING INCIDENT(S)")
     if results:

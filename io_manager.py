@@ -351,9 +351,14 @@ def prompt_note(required: bool) -> str:
     return text
 
 
-def prompt_filters(statuses: list[str]) -> dict:
+def prompt_filters(statuses: list[str], priorities: list[str]) -> dict:
+    """Ask for the History filters. 'any' means do not filter on that field."""
     status = prompt_choice("Filter by status:", ["any"] + statuses)
-    return {"status": "" if status == "any" else status}
+    priority = prompt_choice("Filter by priority:", ["any"] + priorities)
+    return {
+        "status": "" if status == "any" else status,
+        "priority": "" if priority == "any" else priority,
+    }
 
 
 def show_dispatch_notice(record: dict) -> None:

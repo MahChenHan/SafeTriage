@@ -44,6 +44,9 @@ ACTIONS = {
     "Rejected": "No dispatch: not recognised as a workplace hazard.",
 }
 
+# Every priority a record can show, most urgent first (used by the History filter)
+ALL_PRIORITIES = ("Critical", "High", "Medium", "Low", "Unrated", "Rejected")
+
 URGENCY_RANK = {"Critical": 4, "High": 3, "Unrated": 3, "Medium": 2, "Low": 1, "Rejected": 0}
 
 
