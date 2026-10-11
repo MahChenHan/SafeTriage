@@ -15,8 +15,13 @@ import data_manager
 import io_manager
 import logic_manager
 
-# Gemini API key, linked automatically at startup.
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Gemini API key: read from secrets_local.py (untracked, listed in .gitignore),
+# or from the GEMINI_API_KEY environment variable.
+try:
+    from secrets_local import GEMINI_API_KEY
+except ImportError:
+    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
 
 def setup_logging(data_dir: str) -> None:
     """Send logs to a file (never the terminal, which io_manager owns)."""
@@ -29,6 +34,7 @@ def setup_logging(data_dir: str) -> None:
         )
     except OSError:
         logging.disable(logging.CRITICAL)
+
 
 def build_record(report: dict, ai_result: dict, decision: dict) -> dict:
     """Combine report + AI result + logic decision into one storable record."""
@@ -44,6 +50,7 @@ def build_record(report: dict, ai_result: dict, decision: dict) -> dict:
         "decision": decision,
         "status": status,
     }
+
 
 # ------------------------------------------------------------- user terminal
 def run_user_mode(path: str) -> None:
@@ -67,6 +74,7 @@ def run_user_mode(path: str) -> None:
         if not io_manager.confirm("\nReport another hazard?"):
             break
     io_manager.show_message("Thank you. Stay safe.")
+
 
 # ------------------------------------------------------------ admin terminal
 def review_flow(path: str, admin_id: str) -> None:
@@ -112,6 +120,7 @@ def review_flow(path: str, admin_id: str) -> None:
     else:
         io_manager.show_dispatch_notice(updated)
 
+
 def history_flow(path: str) -> None:
     records, warning = data_manager.load_incidents(path)
     if warning:
@@ -124,6 +133,13 @@ def history_flow(path: str) -> None:
         if incident_id:
             io_manager.show_incident_detail(next(item for item in results if item["id"] == incident_id))
 
+
+def run_admin_mode(path: str) -> None:
+    records, warning = data_manager.load_incidents(path)
+    pending = data_manager.filter_incidents(records, status=data_manager.STATUS_PENDING)
+    io_manager.show_admin_welcome(len(records), len(pending))
+    if warning:
+        io_manager.show_warning(warning)
 def run_admin_mode(path: str) -> None:
     admin_id = io_manager.prompt_admin_id()
     while True:
@@ -134,6 +150,8 @@ def run_admin_mode(path: str) -> None:
             history_flow(path)
         elif choice == "quit":
             break
+    io_manager.show_message("Admin session ended.")
+
     io_manager.show_message("Admin session ended.")  
 
 def main() -> int:
@@ -158,6 +176,7 @@ def main() -> int:
     except (KeyboardInterrupt, EOFError):
         io_manager.show_message("\nSession ended.")
     return 0
+
 
 if __name__ == "__main__":
     exit_code = main()

@@ -295,6 +295,11 @@ def show_pending_list(pending: list[dict], urgent_count: int) -> None:
     show_incident_table(pending, "PENDING REVIEW (most urgent first)")
 
 
+def show_admin_welcome(record_count: int, pending_count: int) -> None:
+    show_heading("SAFETRIAGE - ADMIN CONSOLE")
+    say(f"{record_count} incident(s) on file, {pending_count} awaiting review.")
+
+
 def admin_menu() -> str:
     options = {
         "Review a pending incident": "review",
