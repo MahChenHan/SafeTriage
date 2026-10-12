@@ -4,6 +4,7 @@ Every write re-reads the file first, so two terminals working at once do not
 overwrite each other's records. Writes are atomic (temp file + rename), and a
 missing or corrupt file never crashes the program.
 """
+from contextlib import contextmanager
 import json
 import logging
 import os
@@ -157,7 +158,7 @@ def next_incident_id(incidents: list[dict]) -> str:
     return f"INC-{highest + 1:04d}"
 
 
-def add_incident(path: str, record: dict) -> tuple[dict | None, str]:
+def _add_incident_unlocked(path: str, record: dict) -> tuple[dict | None, str]:
     """Append a new record (id and timestamp added). Returns (saved_record, message)."""
     incidents, warning = load_incidents(path)
     new_record = dict(record)
@@ -170,7 +171,7 @@ def add_incident(path: str, record: dict) -> tuple[dict | None, str]:
     return new_record, warning
 
 
-def update_incident(path: str, incident_id: str, changes: dict) -> tuple[dict | None, str]:
+def _update_incident_unlocked(path: str, incident_id: str, changes: dict) -> tuple[dict | None, str]:
     """Merge changes into one record. Returns (updated_record, message)."""
     incidents, warning = load_incidents(path)
     for record in incidents:
@@ -199,3 +200,55 @@ def filter_incidents(incidents: list[dict], status: str = "", priority: str = ""
             continue
         results.append(record)
     return results
+
+
+@contextmanager
+def incident_file_lock(path: str):
+    """Lock storage during an incident read/update/save operation."""
+    lock_path = path + ".lock"
+    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+
+    with open(lock_path, "a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def add_incident(path: str, record: dict) -> tuple[dict | None, str]:
+    """Append a report while holding the shared storage lock."""
+    try:
+        with incident_file_lock(path):
+            return _add_incident_unlocked(path, record)
+    except OSError as error:
+        logger.error("Could not access incidents for adding: %s", error)
+        return None, f"Could not access incident storage: {error}"
+
+
+def update_incident(path: str, incident_id: str, changes: dict) -> tuple[dict | None, str]:
+    """Update a report while holding the shared storage lock."""
+    try:
+        with incident_file_lock(path):
+            return _update_incident_unlocked(path, incident_id, changes)
+    except OSError as error:
+        logger.error("Could not access incidents for updating: %s", error)
+        return None, f"Could not access incident storage: {error}"
