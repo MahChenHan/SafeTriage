@@ -70,11 +70,16 @@ def load_incidents(path: str) -> tuple[list[dict], str]:
 
 
 def is_valid_decision(decision: object) -> bool:
-    """A decision/final block needs a text priority and a list of team names."""
+    """Check priority, team names and optional explanation reasons."""
     if not isinstance(decision, dict) or not isinstance(decision.get("priority"), str):
         return False
+
     teams = decision.get("teams")
-    return isinstance(teams, list) and all(isinstance(team, str) for team in teams)
+    if not isinstance(teams, list) or not all(isinstance(team, str) for team in teams):
+        return False
+
+    reasons = decision.get("reasons", [])
+    return isinstance(reasons, list) and all(isinstance(reason, str) for reason in reasons)
 
 
 def is_valid_analysis(analysis: object) -> bool:
