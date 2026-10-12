@@ -11,3 +11,4 @@ data/*.json
 data/*.log
 data/*.tmp
 data/*.corrupt-*
+data/*.lock
