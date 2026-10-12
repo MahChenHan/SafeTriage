@@ -246,7 +246,7 @@ def build_final_decision(priority: str, teams: list[str], note: str, admin_id: s
     """The admin-confirmed decision stored on a reviewed incident."""
     return {
         "priority": priority,
-        "teams": teams,
+        "teams": list(teams),
         "action": determine_action(priority, teams),
         "note": note,
         "reviewed_by": admin_id,
