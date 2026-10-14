@@ -18,3 +18,21 @@
 ### -AI risk extraction and structured JSON output
 ### -A human approves or overrides before dispatch.
 ### -Graceful handling of bad input, API errors, malformed AI output and file errors
+
+# How to get SafeTriage Started?
+## Input the following code in the terminal. 
+### git clone https://github.com/MahChenHan/SafeTriage.git
+### cd Safetriage
+### open "Dockerfile"
+### In the terminal, input "docker build -t inf1103-safetriage ." 
+### NOTE: This will run SafeTriage WITHOUT Gemini API
+
+# How to report a hazard in Safetriage (as a user)?
+### In the terminal, type "docker run --rm inf1103-safetriage python test_logic_manager.py"
+### This Docker container will run SafeTriage from the POV of a user trying to report a Hazard and its Location.
+
+# How to review incidents that have been reported (as a admin)?
+## Input the following code in the terminal
+### open "Dockerfile" 
+### In the terminal, input "docker run --rm -it --env-file .env -v "${PWD}/data:/app/data" inf1103-safetriage python main.py admin" 
+### This will run Safetriage from the POV of a admin to review existing incidents / hazards that has been reported. The admin will make the final decision to dispatch or contact the relevant authorities.
