@@ -27,8 +27,11 @@
 ### In the terminal, input "docker build -t inf1103-safetriage ." 
 ### NOTE: This will run SafeTriage WITHOUT Gemini API
 
-# How to report a hazard in Safetriage (as a user)?
+# How to run Test script?
 ### In the terminal, type "docker run --rm inf1103-safetriage python test_logic_manager.py"
+
+# How to report a hazard in Safetriage (as a user)?
+### In the terminal, type "docker run --rm -it --env-file .env -v "${PWD}/data:/app/data" inf1103-safetriage python main.py user"
 ### This Docker container will run SafeTriage from the POV of a user trying to report a Hazard and its Location.
 
 # How to review incidents that have been reported (as a admin)?
