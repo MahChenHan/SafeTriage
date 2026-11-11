@@ -1,0 +1,3 @@
+# Only the Gemini SDK is needed at run time. Tests use the standard library only.
+# TIP: pin the exact version you used in Part 1 (run `pip show google-genai`), e.g. google-genai==X.Y.Z
+google-genai
