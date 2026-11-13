@@ -26,6 +26,9 @@ RETRY_DELAY_SECONDS = 1.0
 
 REQUEST_TIMEOUT_SECONDS = 30.0
 
+# Extra seconds AIManager allows on top of a fallback chain, so the chain can finish switching providers.
+TIMEOUT_MARGIN_SECONDS = 5.0
+
 ERROR_API_FAILURE = "api_failure"
 
 ERROR_MALFORMED = "malformed_response"
