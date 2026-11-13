@@ -22,7 +22,3 @@ class SummaryReport:
     pending_urgent: int = 0
     low_confidence: int = 0
     ai_unavailable: int = 0
-    reviewed: int = 0
-    overridden: int = 0
-    override_rate: float = 0.0
-    average_review_minutes: float | None = None

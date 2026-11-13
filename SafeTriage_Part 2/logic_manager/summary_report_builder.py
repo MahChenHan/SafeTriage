@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from collections import Counter
 
-from constants import ALL_PRIORITIES, STATUS_OVERRIDDEN, STATUS_PENDING
+from constants import ALL_PRIORITIES, STATUS_PENDING
 from domain.incident import Incident
 from logic_manager.duplicate_detector import DuplicateDetector
 from logic_manager.summary_report import SummaryReport
 
 
 class SummaryReportBuilder:
-    """Counts, rankings and review-quality figures over a list of incidents."""
+    """Counts, rankings and urgent-backlog figures over a list of incidents."""
 
     def __init__(self, hotspot_count: int = 3) -> None:
         self._hotspot_count = hotspot_count
@@ -34,13 +34,6 @@ class SummaryReportBuilder:
             places[key] += 1
             place_label.setdefault(key, item.location.strip())
 
-        reviewed = [item for item in incidents if item.final is not None]
-        overridden = sum(1 for item in reviewed if item.status == STATUS_OVERRIDDEN)
-        review_minutes: list[float] = []
-        for item in reviewed:
-            hours = DuplicateDetector.hours_between(item.reported_at, item.final.reviewed_at)
-            if hours is not None:
-                review_minutes.append(hours * 60)
         ranked_places = sorted(places.items(), key=lambda pair: (-pair[1], pair[0]))[: self._hotspot_count]
         return SummaryReport(
             total=len(incidents),
@@ -54,8 +47,4 @@ class SummaryReportBuilder:
             ),
             low_confidence=sum(1 for item in incidents if item.decision.needs_manual_review),
             ai_unavailable=sum(1 for item in incidents if not item.ai.ok),
-            reviewed=len(reviewed),
-            overridden=overridden,
-            override_rate=(overridden / len(reviewed)) if reviewed else 0.0,
-            average_review_minutes=(sum(review_minutes) / len(review_minutes)) if review_minutes else None,
         )
