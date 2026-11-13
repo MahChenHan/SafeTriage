@@ -1,0 +1,31 @@
+name: CI
+
+# Lives at the REPOSITORY ROOT (GitHub only reads workflows from here).
+# The project itself is in the "SafeTriage_Part 2" folder, so the commands below point there.
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Unit tests (no live AI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run test suite
+        working-directory: "SafeTriage_Part 2"
+        run: python -m unittest discover -s tests -p "test_safetriage.py" -v
+
+  docker-tests:
+    name: Docker build and tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image from the project folder
+        run: docker build -t safetriage "./SafeTriage_Part 2"
+      - name: Run tests inside the container
+        run: docker run --rm safetriage python -m unittest discover -s tests -p "test_safetriage.py" -v
