@@ -12,6 +12,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from collections.abc import Iterable
 from dataclasses import replace
 
@@ -23,7 +24,9 @@ from ai_manager.groq_provider import GroqProvider
 from ai_manager.prompt_builder import PromptBuilder
 from ai_manager.response_validator import ResponseValidator
 from application import Application
-from constants import ERROR_API_FAILURE, ERROR_MALFORMED, OUTCOME_DISPATCH, OUTCOME_MANUAL, OUTCOME_REJECTED
+from constants import (
+    ERROR_API_FAILURE, ERROR_MALFORMED, OUTCOME_DISPATCH, OUTCOME_MANUAL, OUTCOME_REJECTED, REQUEST_TIMEOUT_SECONDS,
+)
 from data_manager.data_manager import DataManager
 from data_manager.incident_filter import IncidentFilter
 from data_manager.incident_repository import IncidentRepository
@@ -424,15 +427,19 @@ class RepositoryContract:
         with self.assertRaises(IncidentNotFoundError):
             self.repo.delete("INC-0042")
 
-    def test_ids_stay_unique_after_deleting_the_newest(self):
+    def test_id_of_a_deleted_incident_is_never_reused(self):
+        """Both backends: an audit trail must not show a new report under a deleted report's id."""
         self.repo.add(SampleFactory.make_incident())
         newest = self.repo.add(SampleFactory.make_incident())
         self.repo.delete(newest.id)
-        # JSON derives the next id from the highest remaining id (so it may reuse the deleted one);
-        # SQLite AUTOINCREMENT never reuses. Either way the id must not clash with an existing incident.
         again = self.repo.add(SampleFactory.make_incident())
+        self.assertEqual((newest.id, again.id), ("INC-0002", "INC-0003"))
         self.assertEqual(len({item.id for item in self.repo.list_all().incidents}), 2)
-        self.assertIsNotNone(again.id)
+
+    def test_ids_are_not_reused_even_when_every_incident_is_deleted(self):
+        only = self.repo.add(SampleFactory.make_incident())
+        self.repo.delete(only.id)
+        self.assertEqual(self.repo.add(SampleFactory.make_incident()).id, "INC-0002")
 
     def test_concurrent_adds_never_lose_or_duplicate_records(self):
         errors = []
@@ -494,6 +501,14 @@ class JsonRepositoryTests(RepositoryContract, unittest.TestCase):
         self.assertIn("Backed up", result.warnings[0])
         self.assertEqual(len(self.backups()), 1)
         self.assertEqual(self.repo.add(SampleFactory.make_incident()).id, "INC-0001")   # usable again
+
+    def test_id_counter_file_missing_or_damaged_falls_back_to_the_stored_ids(self):
+        self.repo.add(SampleFactory.make_incident())
+        os.remove(self.repo.path + ".seq")                      # e.g. data saved by an older version
+        self.assertEqual(self.repo.add(SampleFactory.make_incident()).id, "INC-0002")
+        with open(self.repo.path + ".seq", "w", encoding="utf-8") as handle:
+            handle.write("not a number")
+        self.assertEqual(self.repo.add(SampleFactory.make_incident()).id, "INC-0003")
 
     def test_wrong_top_level_type_is_quarantined(self):
         self.write_raw('{"not": "a list"}')
@@ -592,7 +607,7 @@ class SqliteRepositoryTests(RepositoryContract, unittest.TestCase):
 
     def test_damaged_row_is_skipped_with_a_warning_not_a_crash(self):
         self.repo.add(SampleFactory.make_incident())
-        with sqlite3.connect(self.repo.path) as connection:
+        with closing(sqlite3.connect(self.repo.path)) as connection, connection:
             connection.execute("UPDATE incidents SET ai_json = 'not json' WHERE id = 'INC-0001'")
         self.repo.add(SampleFactory.make_incident())
         result = self.repo.list_all()
@@ -1637,27 +1652,29 @@ class FallbackAIProviderTests(unittest.TestCase):
         fake.GROQ_MODEL = "some-model"
         with unittest.mock.patch.dict(sys.modules, {"secrets_local": fake}), \
                 unittest.mock.patch.dict(os.environ, {}, clear=True):
-            provider = Application._build_ai_provider()
-        self.assertIsInstance(provider, FallbackAIProvider)
-        self.assertEqual(provider.provider_names, ["GeminiProvider", "GroqProvider"])
-        self.assertEqual(provider._providers[1].model, "some-model")
+            providers = Application._ai_providers()
+        self.assertEqual([type(provider).__name__ for provider in providers], ["GeminiProvider", "GroqProvider"])
+        self.assertEqual(providers[1].model, "some-model")
 
     def test_no_backup_when_no_groq_key_anywhere(self):
         import sys
 
         with unittest.mock.patch.dict(sys.modules, {"secrets_local": None}), \
                 unittest.mock.patch.dict(os.environ, {"GEMINI_API_KEY": "g"}, clear=True):
-            provider = Application._build_ai_provider()
-        self.assertIsInstance(provider, GeminiProvider)
+            providers = Application._ai_providers()
+            manager = Application._build_ai_manager()
+        self.assertEqual([type(provider).__name__ for provider in providers], ["GeminiProvider"])
+        self.assertIsInstance(manager._provider, GeminiProvider)      # used directly, no chain
+        self.assertEqual(manager._timeout, REQUEST_TIMEOUT_SECONDS)
 
     def test_application_gives_the_manager_time_for_the_whole_chain(self):
         """Regression: the manager's 30 s limit used to end the call before Groq was tried."""
         with unittest.mock.patch.dict(os.environ, {"GROQ_API_KEY": "k", "GEMINI_API_KEY": "g"}):
-            provider = Application._build_ai_provider()
-            manager = Application._build_ai_manager(provider)
-        self.assertIsInstance(provider, FallbackAIProvider)
-        self.assertEqual(provider.total_timeout, 60)
-        self.assertGreater(manager._timeout, provider.total_timeout)
+            manager = Application._build_ai_manager()
+        chain = manager._provider
+        self.assertEqual(chain.provider_names, ["GeminiProvider", "GroqProvider"])
+        self.assertEqual(chain.total_timeout, 2 * REQUEST_TIMEOUT_SECONDS)
+        self.assertGreater(manager._timeout, chain.total_timeout)
 
 
 if __name__ == "__main__":
