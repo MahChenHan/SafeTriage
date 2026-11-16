@@ -1191,3 +1191,395 @@ class SummaryReportTests(unittest.TestCase):
     def test_ai_unavailable_is_counted(self):
         failed = SampleFactory.make_incident("INC-0009", ai=SAMPLE_API_FAILURE, priority="Unrated")
         self.assertEqual(self.logic.summarise([failed]).ai_unavailable, 1)
+
+# ==========================================================================
+# From tests/test_sessions.py
+# ==========================================================================
+
+"""Integration tests: IOManager + AIManager + LogicManager + DataManager working together.
+
+The AI is a ScriptedProvider and the keyboard is a ScriptedIO, so whole user and admin
+sessions run end to end with no live API, on BOTH storage backends.
+"""
+
+
+CRITICAL_REPLY = SampleFactory.raw_reply(hazard_types=["electrical", "water"], severity=5, people_exposed=6,
+                           confidence=0.96, summary="Water on a live socket.")
+SLIP_REPLY = SampleFactory.raw_reply()
+NOT_HAZARD_REPLY = SampleFactory.raw_reply(is_hazard_report=False, hazard_types=[], severity=1, people_exposed=0,
+                             summary="Asking about lunch.")
+
+REPORT_ANSWERS = ["Alice", "Lab 3", "Water is dripping onto a power socket"]
+
+
+class Harness:
+    """Builds the four managers around a temp store for one test."""
+
+    def __init__(self, test: unittest.TestCase, backend: str, replies, answers, repository=None):
+        tmp = tempfile.TemporaryDirectory()
+        test.addCleanup(tmp.cleanup)
+        self.dir = tmp.name
+        self.script = ScriptedIO(answers)
+        self.provider = ScriptedProvider(replies)
+        self.io = IOManager(self.script.input, self.script.print)
+        self.ai = AIManager(self.provider, model="test", sleep=lambda s: None)
+        self.logic = LogicManager()
+        self.repo = repository or RepositoryFactory.create(backend, self.dir)
+        self.data = DataManager(self.repo)
+
+    def session(self, session_class):
+        return session_class(self.io, self.ai, self.logic, self.data)
+
+    @property
+    def text(self):
+        return self.script.text
+
+
+class BackendCases:
+    """Mixin: every test below runs once per storage backend."""
+    BACKENDS = ("json", "sqlite")
+
+    def each_backend(self):
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                yield backend
+
+
+class UserSessionTests(BackendCases, unittest.TestCase):
+    def test_critical_report_is_triaged_saved_and_shown(self):
+        for backend in self.each_backend():
+            h = Harness(self, backend, [CRITICAL_REPLY], REPORT_ANSWERS + ["n"])
+            h.session(UserSession).run()
+            saved = h.repo.list_all().incidents
+            self.assertEqual(len(saved), 1)
+            self.assertEqual((saved[0].id, saved[0].status), ("INC-0001", "pending_review"))
+            self.assertEqual(saved[0].decision.priority, "Critical")
+            self.assertEqual(saved[0].decision.teams, ("Electrical", "Maintenance"))
+            self.assertIn("Provisional priority : Critical", h.text)
+            self.assertIn("Stay safe", h.text)
+            self.assertEqual(h.provider.calls, 1)          # the record really passed through the AI
+
+    def test_ai_outage_still_saves_the_report_for_manual_triage(self):
+        for backend in self.each_backend():
+            h = Harness(self, backend, [ConnectionError("network down")], REPORT_ANSWERS + ["n"])
+            h.session(UserSession).run()
+            saved = h.repo.list_all().incidents[0]
+            self.assertEqual((saved.decision.priority, saved.ai.error_type), ("Unrated", "api_failure"))
+            self.assertIn("triage this manually", h.text)
+            self.assertEqual(h.provider.calls, 3)           # retried before giving up
+
+    def test_malformed_ai_reply_goes_to_manual_triage(self):
+        for backend in self.each_backend():
+            h = Harness(self, backend, ["definitely not json"], REPORT_ANSWERS + ["n"])
+            h.session(UserSession).run()
+            self.assertEqual(h.repo.list_all().incidents[0].ai.error_type, "malformed_response")
+
+    def test_non_hazard_is_auto_rejected(self):
+        for backend in self.each_backend():
+            h = Harness(self, backend, [NOT_HAZARD_REPLY], ["Alice", "Cafeteria", "What is for lunch today?", "n"])
+            h.session(UserSession).run()
+            self.assertEqual(h.repo.list_all().incidents[0].status, "auto_rejected")
+            self.assertIn("not dispatched", h.text)
+
+    def test_second_report_for_same_place_and_hazard_is_flagged_duplicate(self):
+        for backend in self.each_backend():
+            answers = REPORT_ANSWERS + ["y"] + ["Bob", " lab  3 ", "Still dripping near the socket here"] + ["n"]
+            h = Harness(self, backend, [CRITICAL_REPLY, CRITICAL_REPLY], answers)
+            h.session(UserSession).run()
+            first, second = h.repo.list_all().incidents
+            self.assertEqual(second.decision.duplicate_of, first.id)
+            self.assertTrue(second.decision.needs_manual_review)
+            self.assertEqual(second.decision.priority, first.decision.priority)  # priority untouched
+            self.assertIn("looks like the same hazard as INC-0001", h.text)
+
+    def test_invalid_input_is_re_asked_and_nothing_bad_reaches_the_ai(self):
+        h = Harness(self, "json", [SLIP_REPLY],
+                    ["R2D2", "Alice", "", "Lab 3", "tiny", "Water on the floor in aisle 4", "n"])
+        h.session(UserSession).run()
+        self.assertEqual(h.text.count("[ERROR]"), 3)
+        self.assertEqual(h.provider.calls, 1)
+
+    def test_save_failure_is_reported_and_the_session_continues(self):
+        class FailingRepository(JsonIncidentRepository):
+            def add(self, incident):
+                raise StorageError("Could not save incidents: disk full")
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        h = Harness(self, "json", [SLIP_REPLY], REPORT_ANSWERS + ["n"],
+                    repository=FailingRepository(os.path.join(tmp.name, "incidents.json")))
+        h.session(UserSession).run()
+        self.assertIn("disk full", h.text)
+        self.assertIn("Your report was NOT saved", h.text)
+        self.assertIn("Stay safe", h.text)
+
+    def test_corrupt_data_file_warns_and_still_accepts_reports(self):
+        h = Harness(self, "json", [SLIP_REPLY], REPORT_ANSWERS + ["n"])
+        with open(h.repo.path, "w") as handle:
+            handle.write("{{{ broken")
+        h.session(UserSession).run()
+        self.assertIn("[WARNING]", h.text)
+        self.assertEqual(len(h.repo.list_all().incidents), 1)
+
+
+class AdminSessionTests(BackendCases, unittest.TestCase):
+    def seed(self, h, *incidents):
+        for incident in incidents:
+            h.repo.add(incident)
+
+    def test_approve_marks_incident_and_prints_dispatch_notice(self):
+        for backend in self.each_backend():
+            h = Harness(self, backend, [], ["admin01", "1", "1", "1", "1", "all clear", "5"])
+            self.seed(h, SampleFactory.make_incident(priority="High"))
+            h.session(AdminSession).run()
+            stored = h.repo.get("INC-0001")
+            self.assertEqual((stored.status, stored.final.priority, stored.final.reviewed_by),
+                             ("approved", "High", "admin01"))
+            self.assertIn("DISPATCH NOTICE", h.text)
+            self.assertIn("Admin session ended", h.text)
+
+    def test_override_changes_priority_and_teams_and_requires_a_note(self):
+        for backend in self.each_backend():
+            # review, pick INC-1, override, priority 4 (Critical), teams 2,3, blank note rejected, then a real one
+            h = Harness(self, backend, [], ["admin01", "1", "1", "2", "4", "2,3", "", "evacuate", "5"])
+            self.seed(h, SampleFactory.make_incident(priority="Low"))
+            h.session(AdminSession).run()
+            stored = h.repo.get("INC-0001")
+            self.assertEqual((stored.status, stored.final.priority), ("overridden", "Critical"))
+            self.assertEqual(stored.final.teams, ("Electrical", "Fire Safety"))
+            self.assertEqual(stored.final.note, "evacuate")
+            self.assertIn("A note is required", h.text)
+
+    def test_reject_records_a_rejection_without_dispatch(self):
+        h = Harness(self, "json", [], ["admin01", "1", "1", "3", "duplicate of another", "5"])
+        self.seed(h, SampleFactory.make_incident(priority="Medium"))
+        h.session(AdminSession).run()
+        stored = h.repo.get("INC-0001")
+        self.assertEqual((stored.status, stored.final.priority, stored.final.teams), ("rejected", "Rejected", ()))
+        self.assertNotIn("DISPATCH NOTICE", h.text)
+
+    def test_most_urgent_incident_is_listed_first_with_an_alert(self):
+        h = Harness(self, "json", [], ["admin01", "1", "", "5"])
+        self.seed(h, SampleFactory.make_incident(priority="Low"), SampleFactory.make_incident(priority="Critical"))
+        h.session(AdminSession).run()
+        self.assertIn("ALERT: 1 urgent", h.text)
+        self.assertLess(h.text.index("INC-0002"), h.text.index("INC-0001", h.text.index("PENDING REVIEW")))
+
+    def test_nothing_pending_is_handled_politely(self):
+        h = Harness(self, "json", [], ["admin01", "1", "5"])
+        h.session(AdminSession).run()
+        self.assertIn("No incidents are awaiting review", h.text)
+
+    def test_unrated_incident_cannot_be_approved(self):
+        h = Harness(self, "json", [], ["admin01", "1", "1", "3", "5"])   # menu is Override/Reject/Back: 3 = Back
+        self.seed(h, SampleFactory.make_incident(ai=SAMPLE_API_FAILURE, priority="Unrated"))
+        h.session(AdminSession).run()
+        self.assertIn("cannot be approved as-is", h.text)
+        self.assertEqual(h.repo.get("INC-0001").status, "pending_review")
+
+    def test_concurrent_review_conflict_is_reported_not_overwritten(self):
+        class RacingRepository(JsonIncidentRepository):
+            """Simulates a second admin reviewing the same incident a moment earlier."""
+            def update(self, incident, expected_status=None):
+                raise ConflictError("Incident INC-0001 was already changed by someone else (now 'approved').")
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        h = Harness(self, "json", [], ["admin01", "1", "1", "1", "1", "", "5"],
+                    repository=RacingRepository(os.path.join(tmp.name, "incidents.json")))
+        self.seed(h, SampleFactory.make_incident(priority="High"))
+        h.session(AdminSession).run()
+        self.assertIn("already changed by someone else", h.text)
+        self.assertNotIn("DISPATCH NOTICE", h.text)
+
+    def test_history_filters_and_shows_detail(self):
+        for backend in self.each_backend():
+            # menu 2 (history); status any(1), priority option 2 = 'Critical'; pick INC-2; quit
+            h = Harness(self, backend, [], ["admin01", "2", "1", "2", "2", "5"])
+            self.seed(h, SampleFactory.make_incident(priority="Low"), SampleFactory.make_incident(priority="Critical"))
+            h.session(AdminSession).run()
+            self.assertIn("1 MATCHING INCIDENT(S)", h.text)
+            self.assertIn("Description     : Water on the floor", h.text)
+
+    def test_summary_report_screen(self):
+        for backend in self.each_backend():
+            h = Harness(self, backend, [], ["admin01", "3", "5"])
+            self.seed(h, SampleFactory.make_incident(priority="Critical", location="Lab 3"),
+                      SampleFactory.make_incident(priority="Low", location="Lab 3", hazards=("fire",)))
+            h.session(AdminSession).run()
+            for expected in ("SUMMARY REPORT", "Total incidents on file : 2", "Lab 3", "HAZARD TYPES"):
+                self.assertIn(expected, h.text)
+
+    def test_purge_deletes_only_rejected_incidents_after_confirmation(self):
+        for backend in self.each_backend():
+            h = Harness(self, backend, [], ["admin01", "4", "2", "y", "5"])
+            self.seed(h, SampleFactory.make_incident(status="pending_review"), SampleFactory.make_incident(status="rejected", priority="Rejected"))
+            h.session(AdminSession).run()
+            self.assertEqual([item.id for item in h.repo.list_all().incidents], ["INC-0001"])
+            self.assertIn("INC-0002 was deleted", h.text)
+
+    def test_purge_can_be_cancelled_and_pending_incidents_are_not_offered(self):
+        h = Harness(self, "json", [], ["admin01", "4", "2", "n", "5"])
+        self.seed(h, SampleFactory.make_incident(status="pending_review"), SampleFactory.make_incident(status="rejected", priority="Rejected"))
+        h.session(AdminSession).run()
+        self.assertEqual(len(h.repo.list_all().incidents), 2)
+        self.assertIn("Nothing was deleted", h.text)
+        self.assertNotIn("INC-0001 ", h.text[h.text.index("REJECTED INCIDENTS"):])
+
+    def test_purge_with_nothing_to_delete(self):
+        h = Harness(self, "json", [], ["admin01", "4", "5"])
+        self.seed(h, SampleFactory.make_incident(status="pending_review"))
+        h.session(AdminSession).run()
+        self.assertIn("no rejected incidents", h.text)
+
+    def test_admin_id_is_validated(self):
+        h = Harness(self, "json", [], ["bad id!", "admin01", "5"])
+        h.session(AdminSession).run()
+        self.assertIn("[ERROR]", h.text)
+
+    def test_corrupt_store_shows_warning_in_admin_console(self):
+        h = Harness(self, "json", [], ["admin01", "5"])
+        with open(h.repo.path, "w") as handle:
+            handle.write("not json")
+        h.session(AdminSession).run()
+        self.assertIn("[WARNING]", h.text)
+        self.assertIn("0 incident(s) on file", h.text)
+
+
+class EndToEndTests(BackendCases, unittest.TestCase):
+    def test_user_report_then_admin_approval_across_two_sessions(self):
+        """The two terminals share one store: what the user files, the admin sees and dispatches."""
+        for backend in self.each_backend():
+            user = Harness(self, backend, [CRITICAL_REPLY], REPORT_ANSWERS + ["n"])
+            user.session(UserSession).run()
+            admin = Harness(self, backend, [], ["admin01", "1", "1", "1", "1", "", "5"],
+                            repository=user.repo)
+            admin.session(AdminSession).run()
+            stored = user.repo.get("INC-0001")
+            self.assertEqual((stored.status, stored.final.teams), ("approved", ("Electrical", "Maintenance")))
+            self.assertIn("IMMEDIATE dispatch", admin.text)
+
+
+class ApplicationTests(unittest.TestCase):
+    def build(self, answers, replies=()):
+        h = Harness(self, "json", list(replies) or [SLIP_REPLY], answers)
+        return Application(h.io, h.ai, h.logic, h.data), h
+
+    def test_unknown_mode_prints_usage_and_returns_2(self):
+        app, h = self.build([])
+        self.assertEqual(app.run(["bogus"]), 2)
+        self.assertIn("Usage: python main.py user", h.text)
+
+    def test_mode_is_chosen_from_the_menu_when_no_argument_is_given(self):
+        app, h = self.build(["2", "admin01", "5"])        # menu: 2 = Admin
+        self.assertEqual(app.run([]), 0)
+        self.assertIn("ADMIN CONSOLE", h.text)
+
+    def test_session_classes_are_registered_and_interchangeable(self):
+        self.assertEqual(set(Application.SESSIONS), {"user", "admin"})
+        for session_class in Application.SESSIONS.values():
+            self.assertTrue(issubclass(session_class, Session))
+
+    def test_session_base_class_is_abstract(self):
+        with self.assertRaises(TypeError):
+            Session(None, None, None, None)
+
+    def test_ctrl_c_or_eof_ends_the_session_cleanly(self):
+        app, h = self.build(["Alice"])            # script runs dry mid-report -> EOFError
+        self.assertEqual(app.run(["user"]), 0)
+        self.assertIn("Session ended", h.text)
+
+    def test_eof_at_the_mode_prompt_exits_quietly(self):
+        app, _ = self.build([])
+        self.assertEqual(app.run([]), 0)
+
+    def test_application_is_wired_with_real_managers(self):
+        app, h = self.build([])
+        self.assertIsInstance(h.repo, IncidentRepository)
+        self.assertIsInstance(app, Application)
+
+
+class GroqProviderTests(unittest.TestCase):
+    """The backup provider, tested without any network: a fake transport records the request."""
+
+    @staticmethod
+    def reply_bytes(text: str) -> bytes:
+        return json.dumps({"choices": [{"message": {"role": "assistant", "content": text}}]}).encode()
+
+    def test_request_has_bearer_key_json_mode_and_the_prompt(self):
+        sent = {}
+
+        def transport(request, timeout):
+            sent["url"] = request.full_url
+            sent["auth"] = request.get_header("Authorization")
+            sent["user_agent"] = request.get_header("User-agent")
+            sent["body"] = json.loads(request.data)
+            sent["timeout"] = timeout
+            return self.reply_bytes("{}")
+
+        GroqProvider(api_key="test-key", model="model-x", transport=transport, timeout=7).generate("PROMPT", "ignored")
+        self.assertEqual(sent["auth"], "Bearer test-key")
+        self.assertNotIn("Python-urllib", sent["user_agent"])
+        self.assertEqual(sent["body"]["model"], "model-x")
+        self.assertEqual(sent["body"]["response_format"], {"type": "json_object"})
+        self.assertEqual(sent["body"]["messages"], [{"role": "user", "content": "PROMPT"}])
+        self.assertEqual(sent["timeout"], 7)
+        self.assertTrue(sent["url"].startswith("https://api.groq.com/"))
+
+    def test_reply_text_is_read_from_the_first_choice(self):
+        provider = GroqProvider(api_key="k", transport=lambda request, timeout: self.reply_bytes('{"a": 1}'))
+        self.assertEqual(provider.generate("p", "m"), '{"a": 1}')
+
+    def test_missing_key_is_a_clear_error_not_a_network_call(self):
+        calls = []
+        provider = GroqProvider(api_key="", transport=lambda request, timeout: calls.append(request) or b"")
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "GROQ_API_KEY is not set"):
+                provider.generate("p", "m")
+        self.assertEqual(calls, [])
+
+    def test_unexpected_response_shape_raises_value_error(self):
+        with self.assertRaisesRegex(ValueError, "unexpected Groq response"):
+            GroqProvider.extract_text(b'{"error": "rate limited"}')
+        with self.assertRaises(ValueError):
+            GroqProvider.extract_text(b"not json")
+
+
+class FallbackAIProviderTests(unittest.TestCase):
+    def test_primary_answer_is_used_and_backup_is_not_called(self):
+        primary, backup = ScriptedProvider(["primary reply"]), ScriptedProvider(["backup reply"])
+        self.assertEqual(FallbackAIProvider([primary, backup]).generate("p", "m"), "primary reply")
+        self.assertEqual(backup.calls, 0)
+
+    def test_backup_answers_when_primary_fails(self):
+        primary = ScriptedProvider([ConnectionError("gemini 503")])
+        backup = ScriptedProvider(["backup reply"])
+        self.assertEqual(FallbackAIProvider([primary, backup]).generate("p", "m"), "backup reply")
+        self.assertEqual(primary.calls, 1)
+        self.assertEqual(backup.calls, 1)
+
+    def test_last_error_is_raised_when_every_provider_fails(self):
+        first = ScriptedProvider([ConnectionError("first down")])
+        second = ScriptedProvider([TimeoutError("second slow")])
+        with self.assertRaises(TimeoutError):
+            FallbackAIProvider([first, second]).generate("p", "m")
+
+    def test_needs_at_least_one_provider(self):
+        with self.assertRaises(ValueError):
+            FallbackAIProvider([])
+
+    def test_ai_manager_uses_backup_when_gemini_is_unavailable(self):
+        primary = ScriptedProvider([ConnectionError("no key")] * 3)
+        backup = ScriptedProvider([SampleFactory.raw_reply()])
+        manager = AIManagerFactory.build(FallbackAIProvider([primary, backup]))
+        result = manager.analyse_report(HazardReport(reporter_id="Test", location="Lab 3", description="Water on the floor"))
+        self.assertTrue(result.ok)
+        self.assertEqual(backup.calls, 1)
+
+    def test_provider_names_show_the_order(self):
+        names = FallbackAIProvider([ScriptedProvider([]), GroqProvider(api_key="k")]).provider_names
+        self.assertEqual(names, ["ScriptedProvider", "GroqProvider"])
+
+
+if __name__ == "__main__":
+    unittest.main()
