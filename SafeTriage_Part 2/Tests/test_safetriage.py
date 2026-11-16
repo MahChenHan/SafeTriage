@@ -667,3 +667,185 @@ class FactoryAndManagerTests(unittest.TestCase):
                 broken = json.loads(json.dumps(good))
                 mutate(broken)
                 Incident.from_dict(broken)
+
+# ==========================================================================
+# From tests/test_io_manager.py
+# ==========================================================================
+
+"""IOManager tests: input validation, re-prompting on bad input, display formatting."""
+
+
+
+class IOFactory:
+    """Builds an IOManager wired to scripted keyboard answers; also returns the script to inspect output."""
+
+    @staticmethod
+    def make_io(answers):
+        script = ScriptedIO(answers)
+        return IOManager(input_fn=script.input, output_fn=script.print), script
+
+
+class ValidatorTests(unittest.TestCase):
+    def test_names(self):
+        for good in ("Alice", "Mary Ann", "Jo", "Ål"):
+            self.assertEqual(InputValidator.validate_name(good), "", good)
+        for bad in ("", "A", "R2D2", "Bob!", "x" * 51, "<script>"):
+            self.assertNotEqual(InputValidator.validate_name(bad), "", bad)
+
+    def test_ids(self):
+        for good in ("ab", "admin_01", "A-1", "x" * 20):
+            self.assertEqual(InputValidator.validate_id(good), "", good)
+        for bad in ("", "a", "has space", "x" * 21, "semi;colon", "../etc"):
+            self.assertNotEqual(InputValidator.validate_id(bad), "", bad)
+
+    def test_location(self):
+        self.assertEqual(InputValidator.validate_location("Lab 3"), "")
+        self.assertNotEqual(InputValidator.validate_location(""), "")
+        self.assertNotEqual(InputValidator.validate_location("x" * 101), "")
+        self.assertEqual(InputValidator.validate_location("x" * 100), "")
+
+    def test_description_boundaries(self):
+        self.assertNotEqual(InputValidator.validate_description("too short"), "")        # 9 chars
+        self.assertEqual(InputValidator.validate_description("just right"), "")          # 10 chars
+        self.assertEqual(InputValidator.validate_description("a" * 1000), "")
+        self.assertNotEqual(InputValidator.validate_description("a" * 1001), "")
+        self.assertNotEqual(InputValidator.validate_description("1234567890 !!!"), "")   # no letters
+
+    def test_note(self):
+        self.assertNotEqual(InputValidator.validate_note(""), "")
+        self.assertEqual(InputValidator.validate_note("checked"), "")
+        self.assertNotEqual(InputValidator.validate_note("x" * 301), "")
+
+    def test_parse_number_list(self):
+        parse = InputValidator.parse_number_list
+        self.assertEqual(parse("1, 3", 5), [1, 3])
+        self.assertEqual(parse("2 2 2", 5), [2])
+        for bad in ("", "0", "6", "a", "1,x", "-1", "1.5"):
+            self.assertIsNone(parse(bad, 5), bad)
+
+
+class PromptTests(unittest.TestCase):
+    def test_prompt_field_reprompts_until_valid(self):
+        io, script = IOFactory.make_io(["", "R2D2", "Alice"])
+        self.assertEqual(io.prompt_field("Your name", InputValidator.validate_name), "Alice")
+        self.assertEqual(script.text.count("[ERROR]"), 2)
+
+    def test_prompt_choice_rejects_non_numbers_and_out_of_range(self):
+        io, script = IOFactory.make_io(["x", "0", "9", "2"])
+        self.assertEqual(io.prompt_choice("Pick", ["a", "b", "c"]), "b")
+        self.assertEqual(script.text.count("[ERROR]"), 3)
+
+    def test_prompt_multi_choice(self):
+        io, _ = IOFactory.make_io(["9", "1, 3"])
+        self.assertEqual(io.prompt_multi_choice("Teams", ["a", "b", "c"]), ["a", "c"])
+
+    def test_confirm(self):
+        io, _ = IOFactory.make_io(["maybe", "YES"])
+        self.assertTrue(io.confirm("ok?"))
+        io, _ = IOFactory.make_io(["n"])
+        self.assertFalse(io.confirm("ok?"))
+
+    def test_prompt_incident_id_accepts_full_id_number_and_blank(self):
+        valid = ["INC-0003", "INC-0010"]
+        for typed, expected in (("inc-0003", "INC-0003"), ("10", "INC-0010"), ("", "")):
+            io, _ = IOFactory.make_io([typed])
+            self.assertEqual(io.prompt_incident_id(valid), expected)
+        io, script = IOFactory.make_io(["INC-0099", "3"])
+        self.assertEqual(io.prompt_incident_id(valid), "INC-0003")
+        self.assertIn("not in the list", script.text)
+
+    def test_optional_note_reprompts_when_too_long(self):
+        io, script = IOFactory.make_io(["x" * 301, "fine"])
+        self.assertEqual(io.prompt_note(required=False), "fine")
+        self.assertIn("at most 300", script.text)
+
+    def test_required_note_cannot_be_blank(self):
+        io, _ = IOFactory.make_io(["", "because"])
+        self.assertEqual(io.prompt_note(required=True), "because")
+
+    def test_prompt_filters_any_means_empty(self):
+        io, _ = IOFactory.make_io(["1", "1"])
+        self.assertEqual(io.prompt_filters(["a"], ["b"]), {"status": "", "priority": ""})
+        io, _ = IOFactory.make_io(["2", "2"])
+        self.assertEqual(io.prompt_filters(["a"], ["b"]), {"status": "a", "priority": "b"})
+
+    def test_collect_report_validates_every_field(self):
+        io, _ = IOFactory.make_io(["Alice", "", "Lab 3", "short", "Water is leaking from the ceiling"])
+        self.assertEqual(io.collect_report(), ("Alice", "Lab 3", "Water is leaking from the ceiling"))
+
+    def test_review_action_without_ai_rating_hides_approve(self):
+        io, script = IOFactory.make_io(["1"])
+        self.assertEqual(io.prompt_review_action(can_approve=False), "override")
+        self.assertNotIn("Approve", script.text)
+
+    def test_eof_propagates_so_the_application_can_exit_cleanly(self):
+        io, _ = IOFactory.make_io([])
+        with self.assertRaises(EOFError):
+            io.ask("anything")
+
+
+class DisplayTests(unittest.TestCase):
+    def setUp(self):
+        self.logic = LogicManager()
+
+    def test_submission_for_normal_report_shows_priority_teams_and_action(self):
+        io, script = IOFactory.make_io([])
+        io.show_submission(SampleFactory.make_incident("INC-0007", priority="High"))
+        self.assertIn("INC-0007", script.text)
+        self.assertIn("Provisional priority : High", script.text)
+        self.assertIn("Maintenance", script.text)
+
+    def test_submission_when_ai_failed_says_manual_triage(self):
+        io, script = IOFactory.make_io([])
+        io.show_submission(SampleFactory.make_incident("INC-0008", ai=SAMPLE_API_FAILURE, priority="Unrated"))
+        self.assertIn("Automated analysis was unavailable", script.text)
+        self.assertIn("api_failure", script.text)
+
+    def test_submission_does_not_leak_technical_error_text_to_the_reporter(self):
+        io, script = IOFactory.make_io([])
+        io.show_submission(SampleFactory.make_incident("INC-0008", ai=SAMPLE_API_FAILURE, priority="Unrated"))
+        self.assertNotIn("network unreachable", script.text)     # exception text stays out of the employee view
+        self.assertNotIn("ConnectionError", script.text)
+        detail = Screens().incident_detail(SampleFactory.make_incident(ai=SAMPLE_API_FAILURE, priority="Unrated"))
+        self.assertIn("network unreachable", detail)             # ...but the admin detail screen still has it
+
+    def test_submission_for_auto_rejected_report(self):
+        io, script = IOFactory.make_io([])
+        io.show_submission(SampleFactory.make_incident("INC-0009", status="auto_rejected"))
+        self.assertIn("did not look like a workplace hazard", script.text)
+
+    def test_detail_shows_ai_rule_and_admin_sections(self):
+        final = FinalDecision("Low", ("Security",), "act", "false alarm", "admin01", "2026-10-12T10:00:00")
+        io, _ = IOFactory.make_io([])
+        text = Screens().incident_detail(SampleFactory.make_incident("INC-0001", status="overridden", final=final))
+        for expected in ("AI ANALYSIS", "RULE ENGINE RECOMMENDATION", "ADMIN DECISION", "false alarm", "admin01"):
+            self.assertIn(expected, text)
+
+    def test_detail_for_failed_ai_does_not_crash(self):
+        io, _ = IOFactory.make_io([])
+        text = Screens().incident_detail(SampleFactory.make_incident(ai=SAMPLE_API_FAILURE, priority="Unrated"))
+        self.assertIn("AI ANALYSIS UNAVAILABLE (api_failure)", text)
+
+    def test_table_empty_and_duplicate_marker(self):
+        io, script = IOFactory.make_io([])
+        io.show_incident_table([], "NOTHING")
+        self.assertIn("(none)", script.text)
+        duplicate = SampleFactory.make_incident("INC-0002")
+        duplicate = replace(duplicate, decision=duplicate.decision.flagged_duplicate("INC-0001", "r"))
+        self.assertIn("[dup of INC-0001]", Screens().incident_line(duplicate))
+
+    def test_summary_display_includes_every_section(self):
+        final = FinalDecision("High", ("Maintenance",), "", "", "admin01", "2026-10-12T10:30:00+00:00")
+        incidents = [SampleFactory.make_incident("INC-0001", status="approved", priority="High", final=final,
+                                   reported_at="2026-10-12T10:00:00+00:00")]
+        io, _ = IOFactory.make_io([])
+        text = Screens().summary(self.logic.summarise(incidents))
+        for expected in ("Total incidents on file : 1", "BY PRIORITY", "BY STATUS", "HAZARD TYPES",
+                         "HOTSPOT LOCATIONS"):
+            self.assertIn(expected, text)
+        self.assertNotIn("REVIEW QUALITY", text)
+
+    def test_summary_display_of_empty_data(self):
+        io, _ = IOFactory.make_io([])
+        text = Screens().summary(self.logic.summarise([]))
+        self.assertIn("Total incidents on file : 0", text)
