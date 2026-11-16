@@ -1,6 +1,7 @@
 """DATA MANAGER - data_manager/file_lock.py
 
-Role: Saves and loads incidents (JSON or SQLite), queries and filters them, and handles missing, corrupt or locked files.
+Role: Saves and loads incidents (JSON or SQLite), queries and filters them, and handles missing,
+corrupt or locked files.
 Class in this file: FileLock
 See README section "Where each manager lives" for the full map.
 """
@@ -8,8 +9,8 @@ See README section "Where each manager lives" for the full map.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 
 class FileLock:

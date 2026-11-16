@@ -9,7 +9,7 @@ from __future__ import annotations
 
 
 class CheckResult:
-    """Tiny type checks shared by the ``from_dict`` methods (internal to this module)."""
+    """Small type checks shared by the ``from_dict`` methods and the AI response validator."""
 
     @staticmethod
     def is_int(value: object) -> bool:

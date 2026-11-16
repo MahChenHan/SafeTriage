@@ -1,6 +1,7 @@
 """AI MANAGER - ai_manager/prompt_builder.py
 
-Role: Builds prompts, calls the Gemini API, parses the JSON reply and validates its schema. Every record passes through here.
+Role: Builds prompts, calls the AI provider (Gemini, with Groq as backup), parses the JSON reply
+and validates its schema. Every record passes through here.
 See README section "Where each manager lives" for the full map.
 """
 

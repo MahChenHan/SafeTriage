@@ -1,6 +1,7 @@
 """IO MANAGER - io_manager/screens.py
 
-Role: Turns records, tables and summaries into lines of text. It never prints or reads input, so every screen can be tested as plain text.
+Role: Turns records, tables and summaries into lines of text. It never prints or reads input, so
+every screen can be tested as plain text.
 Class in this file: Screens
 See README section "Where each manager lives" for the full map.
 """
@@ -76,7 +77,9 @@ class Screens:
         if decision.needs_manual_review:
             lines.append("  ! Flagged for extra human checking")
         if decision.duplicate_of:
-            lines.append(f"  ! Possible duplicate of {decision.duplicate_of} (reject with a note if it is the same hazard)")
+            lines.append(
+                f"  ! Possible duplicate of {decision.duplicate_of} (reject with a note if it is the same hazard)"
+            )
         if record.final:
             lines += [
                 THIN,

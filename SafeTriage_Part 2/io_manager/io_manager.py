@@ -1,6 +1,7 @@
 """IO MANAGER - io_manager/io_manager.py
 
-Role: Collects and validates user input; displays records, lists, results and summaries. Terminal input/output lives only here.
+Role: Collects and validates user input; displays records, lists, results and summaries. Terminal
+input/output lives only here.
 Class in this file: IOManager
 See README section "Where each manager lives" for the full map.
 """

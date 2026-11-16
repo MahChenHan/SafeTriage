@@ -1,6 +1,7 @@
 """LOGIC MANAGER - logic_manager/summary_report.py
 
-Role: Applies the domain business rules to AI-enriched records: scores, escalation, routing, duplicates and summary reports.
+Role: Applies the domain business rules to AI-enriched records: scores, escalation, routing,
+duplicates and summary reports.
 Class in this file: SummaryReport
 See README section "Where each manager lives" for the full map.
 """

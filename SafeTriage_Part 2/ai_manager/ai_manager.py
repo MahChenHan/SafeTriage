@@ -1,6 +1,7 @@
 """AI MANAGER - ai_manager/ai_manager.py
 
-Role: Builds prompts, calls the Gemini API, parses the JSON reply and validates its schema. Every record passes through here.
+Role: Builds prompts, calls the AI provider (Gemini, with Groq as backup), parses the JSON reply
+and validates its schema. Every record passes through here.
 See README section "Where each manager lives" for the full map.
 """
 
@@ -15,12 +16,13 @@ from collections.abc import Callable
 from ai_manager.ai_provider import AIProvider
 from ai_manager.prompt_builder import PromptBuilder
 from ai_manager.response_validator import ResponseValidator
-from constants import DEFAULT_MODEL, ERROR_API_FAILURE, ERROR_MALFORMED, MAX_ATTEMPTS, REQUEST_TIMEOUT_SECONDS, RETRY_DELAY_SECONDS
+from constants import (
+    DEFAULT_MODEL, ERROR_API_FAILURE, ERROR_MALFORMED, MAX_ATTEMPTS, REQUEST_TIMEOUT_SECONDS, RETRY_DELAY_SECONDS,
+)
 from domain.ai_result import AIResult
 from domain.hazard_report import HazardReport
 from errors.ai_timeout_error import AITimeoutError
 from errors.invalid_ai_response_error import InvalidAIResponseError
-
 
 logger = logging.getLogger("safetriage.ai")
 

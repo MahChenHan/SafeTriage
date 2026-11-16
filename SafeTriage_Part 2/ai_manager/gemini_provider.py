@@ -1,6 +1,7 @@
 """AI MANAGER - ai_manager/gemini_provider.py
 
-Role: Builds prompts, calls the Gemini API, parses the JSON reply and validates its schema. Every record passes through here.
+Role: Builds prompts, calls the AI provider (Gemini, with Groq as backup), parses the JSON reply
+and validates its schema. Every record passes through here.
 See README section "Where each manager lives" for the full map.
 """
 
@@ -12,7 +13,7 @@ from ai_manager.ai_provider import AIProvider
 
 
 class GeminiProvider(AIProvider):
-    """Google Gemini implementation. The only class that touches the network."""
+    """Google Gemini implementation of AIProvider (the primary AI). Uses the google-genai SDK."""
 
     def __init__(self, api_key: str | None = None) -> None:
         # Read lazily from the environment so the key is never stored in the repo.

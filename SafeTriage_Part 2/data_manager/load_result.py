@@ -1,6 +1,7 @@
 """DATA MANAGER - data_manager/load_result.py
 
-Role: Saves and loads incidents (JSON or SQLite), queries and filters them, and handles missing, corrupt or locked files.
+Role: Saves and loads incidents (JSON or SQLite), queries and filters them, and handles missing,
+corrupt or locked files.
 Class in this file: LoadResult
 See README section "Where each manager lives" for the full map.
 """
