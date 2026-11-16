@@ -1,6 +1,7 @@
 """DATA MANAGER - data_manager/sqlite_incident_repository.py
 
-Role: Saves and loads incidents (JSON or SQLite), queries and filters them, and handles missing, corrupt or locked files.
+Role: Saves and loads incidents (JSON or SQLite), queries and filters them, and handles missing,
+corrupt or locked files.
 Class in this file: SqliteIncidentRepository
 See README section "Where each manager lives" for the full map.
 """
@@ -14,6 +15,7 @@ import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
 
+from constants import INCIDENT_ID_PREFIX
 from data_manager.incident_repository import IncidentRepository
 from data_manager.load_result import LoadResult
 from domain.incident import Incident
@@ -151,7 +153,7 @@ class SqliteIncidentRepository(IncidentRepository):
                     ":updated_at, :effective_priority, :ai_json, :decision_json, :final_json)",
                     values,
                 )
-                new_id = f"INC-{cursor.lastrowid:04d}"
+                new_id = f"{INCIDENT_ID_PREFIX}{cursor.lastrowid:04d}"
                 connection.execute("UPDATE incidents SET id = ? WHERE seq = ?", (new_id, cursor.lastrowid))
         except sqlite3.Error as error:
             logger.error("Could not add incident: %s", error)

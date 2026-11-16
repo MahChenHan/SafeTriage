@@ -1,6 +1,7 @@
 """DATA MANAGER - data_manager/json_incident_repository.py
 
-Role: Saves and loads incidents (JSON or SQLite), queries and filters them, and handles missing, corrupt or locked files.
+Role: Saves and loads incidents (JSON or SQLite), queries and filters them, and handles missing,
+corrupt or locked files.
 Class in this file: JsonIncidentRepository
 See README section "Where each manager lives" for the full map.
 """
@@ -11,10 +12,11 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Iterator
 
+from constants import INCIDENT_ID_PREFIX
 from data_manager.file_lock import FileLock
 from data_manager.incident_filter import IncidentFilter
 from data_manager.incident_repository import IncidentRepository
@@ -24,12 +26,17 @@ from errors.conflict_error import ConflictError
 from errors.incident_not_found_error import IncidentNotFoundError
 from errors.storage_error import StorageError
 
-
 logger = logging.getLogger("safetriage.data")
 
 
 class JsonIncidentRepository(IncidentRepository):
-    """Stores all incidents in one JSON list (the Part 1 file format)."""
+    """Stores all incidents in one JSON list (the Part 1 file format).
+
+    A small counter file beside it remembers the highest id ever issued, so the id of a
+    deleted incident is never given to a new one (the same guarantee SQLite gives).
+    """
+
+    _COUNTER_SUFFIX = ".seq"
 
     def __init__(self, path: str) -> None:
         self._path = path
@@ -56,7 +63,7 @@ class JsonIncidentRepository(IncidentRepository):
         if not os.path.exists(self._path):
             return [], ""
         try:
-            with open(self._path, "r", encoding="utf-8") as handle:
+            with open(self._path, encoding="utf-8") as handle:
                 data = json.load(handle)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
             return [], self._quarantine(str(error))
@@ -85,14 +92,29 @@ class JsonIncidentRepository(IncidentRepository):
                 os.remove(temp_path)
             raise StorageError(f"Could not save incidents: {error}") from error
 
-    @staticmethod
-    def _next_id(records: list[dict]) -> str:
+    # ------------------------------------------------------------ id numbers
+    def _highest_issued(self, records: list[dict]) -> int:
+        """Highest id number ever given out: the larger of the stored records and the saved counter."""
         highest = 0
         for record in records:
             text = str(record.get("id", ""))
-            if text.startswith("INC-") and text[4:].isdecimal():
-                highest = max(highest, int(text[4:]))
-        return f"INC-{highest + 1:04d}"
+            number = text[len(INCIDENT_ID_PREFIX):]
+            if text.startswith(INCIDENT_ID_PREFIX) and number.isdecimal():
+                highest = max(highest, int(number))
+        try:
+            with open(self._path + self._COUNTER_SUFFIX, encoding="utf-8") as handle:
+                highest = max(highest, int(handle.read().strip()))
+        except (OSError, ValueError):
+            pass    # no counter yet, or it is unreadable: the stored records are the best guide
+        return highest
+
+    def _remember_issued(self, number: int) -> None:
+        """Save the counter. A failure only loses the no-reuse guarantee, so it is logged, not raised."""
+        try:
+            with open(self._path + self._COUNTER_SUFFIX, "w", encoding="utf-8") as handle:
+                handle.write(str(number))
+        except OSError as error:
+            logger.warning("Could not save the incident id counter: %s", error)
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -107,9 +129,11 @@ class JsonIncidentRepository(IncidentRepository):
     def add(self, incident: Incident) -> Incident:
         with self._locked():
             records, _ = self._read_raw()
-            saved = incident.with_id(self._next_id(records))
+            number = self._highest_issued(records) + 1
+            saved = incident.with_id(f"{INCIDENT_ID_PREFIX}{number:04d}")
             records.append(saved.to_dict())
             self._write_raw(records)
+            self._remember_issued(number)
         return saved
 
     def list_all(self) -> LoadResult:
