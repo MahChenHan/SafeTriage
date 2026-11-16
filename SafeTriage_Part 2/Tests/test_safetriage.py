@@ -849,3 +849,345 @@ class DisplayTests(unittest.TestCase):
         io, _ = IOFactory.make_io([])
         text = Screens().summary(self.logic.summarise([]))
         self.assertIn("Total incidents on file : 0", text)
+        # ==========================================================================
+# From tests/test_logic_manager.py
+# ==========================================================================
+
+"""LogicManager tests: business rules, routing, duplicates, ordering, summary report.
+
+Every test feeds hardcoded sample AI responses (the sample data at the top of this file), so no API key,
+network or extra package is needed. Part 1's 38 function tests are all kept here.
+"""
+
+
+NOW = "2026-10-12T10:00:00+00:00"
+
+
+class PriorityRuleTests(unittest.TestCase):
+    def setUp(self):
+        self.logic = LogicManager()
+
+    def priority(self, **changes):
+        return self.logic.determine_priority(SampleFactory.make_analysis(**changes))
+
+    def test_low_severity_single_hazard_is_low(self):
+        priority, reasons = self.priority(severity=1)
+        self.assertEqual(priority, "Low")
+        self.assertEqual(len(reasons), 1)  # only the base-level reason
+
+    def test_each_severity_gives_expected_base_priority(self):
+        expected = {1: "Low", 2: "Low", 3: "Medium", 4: "High", 5: "Critical"}
+        for severity, priority in expected.items():
+            with self.subTest(severity=severity):
+                self.assertEqual(self.priority(severity=severity)[0], priority)
+
+    def test_two_hazards_escalate_one_level(self):
+        priority, reasons = self.priority(hazard_types=["slip_trip", "chemical"], severity=3)
+        self.assertEqual(priority, "High")
+        self.assertTrue(any("Escalated one level" in reason for reason in reasons))
+
+    def test_escalation_never_goes_above_critical(self):
+        self.assertEqual(self.priority(hazard_types=["fire", "chemical"], severity=5)[0], "Critical")
+
+    def test_injury_alone_raises_to_high(self):
+        priority, reasons = self.priority(severity=1, injury_present=True)
+        self.assertEqual(priority, "High")
+        self.assertIn("Raised to High: injury reported", reasons)
+
+    def test_rule_electrical_plus_water_at_severity_3_is_critical(self):
+        priority, reasons = self.priority(hazard_types=["electrical", "water"], severity=3)
+        self.assertEqual(priority, "Critical")
+        self.assertTrue(any("electrical + water" in reason for reason in reasons))
+
+    def test_rule_electrical_plus_water_below_severity_3_is_not_critical(self):
+        # Low base, +1 for two hazards; the critical rule needs severity >= 3
+        self.assertEqual(self.priority(hazard_types=["electrical", "water"], severity=2)[0], "Medium")
+
+    def test_rule_electrical_alone_is_not_critical(self):
+        self.assertEqual(self.priority(hazard_types=["electrical"], severity=3)[0], "Medium")
+
+    def test_rule_fire_with_injury_is_critical(self):
+        priority, reasons = self.logic.determine_priority(SAMPLE_FIRE_INJURY.analysis)
+        self.assertEqual(priority, "Critical")
+        self.assertTrue(any("fire hazard with injury" in reason for reason in reasons))
+
+    def test_rule_fire_without_injury_follows_severity(self):
+        self.assertEqual(self.priority(hazard_types=["fire"], severity=2)[0], "Low")
+
+    def test_rule_structural_with_many_people_is_high(self):
+        priority, reasons = self.logic.determine_priority(SAMPLE_STRUCTURAL_CROWD.analysis)
+        self.assertEqual(priority, "High")
+        self.assertTrue(any("structural hazard" in reason for reason in reasons))
+
+    def test_rule_structural_threshold_is_five_people(self):
+        self.assertEqual(self.priority(hazard_types=["structural"], severity=2, people_exposed=5)[0], "High")
+        self.assertEqual(self.priority(hazard_types=["structural"], severity=2, people_exposed=4)[0], "Low")
+
+
+class RuleClassDesignTests(unittest.TestCase):
+    """Evidence for Open/Closed and Liskov Substitution on the rule hierarchy."""
+
+    ALL_RULES = (MultiHazardEscalationRule, InjuryRule, StructuralCrowdRule, ElectricalWaterRule, FireInjuryRule)
+
+    def test_every_rule_is_a_triage_rule_and_never_lowers_the_level(self):
+        analysis = SampleFactory.make_analysis(hazard_types=["electrical", "water", "fire"], severity=5, injury_present=True)
+        for rule_class in self.ALL_RULES:
+            for level in range(4):
+                with self.subTest(rule=rule_class.__name__, level=level):
+                    rule = rule_class()
+                    self.assertIsInstance(rule, TriageRule)
+                    result = rule.apply(analysis, level)
+                    self.assertIsInstance(result, RuleResult)
+                    self.assertGreaterEqual(result.level, level)  # LSP: same contract for every subclass
+
+    def test_rules_that_do_not_apply_leave_level_and_reason_untouched(self):
+        quiet = SampleFactory.make_analysis()
+        for rule_class in (InjuryRule, StructuralCrowdRule, ElectricalWaterRule, FireInjuryRule):
+            result = rule_class().apply(quiet, 1)
+            self.assertEqual(result, RuleResult(1))
+            self.assertFalse(result.fired)
+
+    def test_abstract_classes_cannot_be_instantiated(self):
+        with self.assertRaises(TypeError):
+            TriageRule()
+        with self.assertRaises(TypeError):
+            MinimumLevelRule()
+
+    def test_new_rule_can_be_added_without_editing_logic_manager(self):
+        class NightShiftChemicalRule(MinimumLevelRule):
+            floor = 3
+
+            def applies(self, analysis):
+                return "chemical" in analysis.hazard_types
+
+            def reason(self, analysis):
+                return "Raised to Critical: chemical hazard (custom rule)"
+
+        logic = LogicManager(extra_rules=[NightShiftChemicalRule()])
+        priority, reasons = logic.determine_priority(SampleFactory.make_analysis(hazard_types=["chemical"], severity=1))
+        self.assertEqual(priority, "Critical")
+        self.assertIn("NightShiftChemicalRule", logic.rule_names)
+        self.assertEqual(reasons[-1], "Raised to Critical: chemical hazard (custom rule)")
+        # the default manager is unaffected: each manager owns its own rules
+        self.assertEqual(LogicManager().determine_priority(SampleFactory.make_analysis(hazard_types=["chemical"], severity=1))[0], "Low")
+
+    def test_add_rule_extends_an_existing_manager(self):
+        logic = LogicManager()
+        before = len(logic.rule_names)
+        logic.add_rule(InjuryRule())
+        self.assertEqual(len(logic.rule_names), before + 1)
+
+
+class RoutingTests(unittest.TestCase):
+    def setUp(self):
+        self.logic = LogicManager()
+
+    def test_teams_for_fire_injury_add_emergency_response_first(self):
+        self.assertEqual(TeamRouter().teams_for(SAMPLE_FIRE_INJURY.analysis, "Critical"),
+                         ["Emergency Response", "Fire Safety"])
+
+    def test_teams_follow_hazard_precedence(self):
+        teams = TeamRouter().teams_for(SampleFactory.make_analysis(hazard_types=["water", "electrical"]), "High")
+        self.assertEqual(teams, ["Electrical", "Maintenance"])
+
+    def test_teams_have_no_duplicates(self):
+        teams = TeamRouter().teams_for(SampleFactory.make_analysis(hazard_types=["water", "slip_trip", "structural"]), "Low")
+        self.assertEqual(teams, ["Maintenance"])
+
+    def test_injury_below_critical_does_not_call_emergency_response(self):
+        self.assertNotIn("Emergency Response",
+                         TeamRouter().teams_for(SampleFactory.make_analysis(injury_present=True), "High"))
+
+    def test_action_text_matches_priority_and_names_teams(self):
+        action = TeamRouter().action_for
+        self.assertIn("IMMEDIATE", action("Critical", ["Fire Safety"]))
+        high = action("High", ["Electrical", "Maintenance"])
+        self.assertIn("Electrical, Maintenance", high)
+        self.assertIn("1 hour", high)
+        self.assertIn("today", action("Medium", ["Maintenance"]))
+        self.assertIn("routine", action("Low", ["Maintenance"]))
+        self.assertIn("Manual triage", action("Unknown", []))
+
+    def test_low_confidence_needs_manual_review(self):
+        self.assertTrue(self.logic.needs_manual_review(SampleFactory.make_analysis(confidence=0.59)))
+        self.assertFalse(self.logic.needs_manual_review(SampleFactory.make_analysis(confidence=0.6)))
+
+
+class TriageDecisionTests(unittest.TestCase):
+    def setUp(self):
+        self.logic = LogicManager()
+
+    def test_triage_proposal_example_is_critical_dispatch(self):
+        decision = self.logic.triage(SAMPLE_ELECTRICAL_WATER)
+        self.assertEqual(decision.outcome, OUTCOME_DISPATCH)
+        self.assertEqual(decision.priority, "Critical")
+        self.assertEqual(decision.teams, ("Electrical", "Maintenance"))
+        self.assertTrue(decision.notify_staff)
+        self.assertFalse(decision.needs_manual_review)
+
+    def test_triage_rejects_non_hazard(self):
+        decision = self.logic.triage(SAMPLE_NOT_A_HAZARD)
+        self.assertEqual((decision.outcome, decision.priority), (OUTCOME_REJECTED, "Rejected"))
+        self.assertEqual(decision.teams, ())
+        self.assertFalse(decision.notify_staff)
+
+    def test_triage_api_failure_goes_to_manual_triage(self):
+        decision = self.logic.triage(SAMPLE_API_FAILURE)
+        self.assertEqual(decision.outcome, OUTCOME_MANUAL)
+        self.assertEqual(decision.priority, "Unrated")
+        self.assertEqual(decision.teams, ("Workplace Safety",))
+        self.assertTrue(decision.needs_manual_review and decision.notify_staff)
+        self.assertIn("api_failure", decision.reasons[0])
+
+    def test_triage_malformed_ai_output_goes_to_manual_triage(self):
+        decision = self.logic.triage(SAMPLE_MALFORMED)
+        self.assertEqual(decision.priority, "Unrated")
+        self.assertIn("malformed_response", decision.reasons[0])
+
+    def test_triage_low_confidence_is_flagged_and_notifies(self):
+        decision = self.logic.triage(SampleFactory.make_result(severity=1, confidence=0.4))
+        self.assertEqual(decision.priority, "Low")
+        self.assertTrue(decision.needs_manual_review and decision.notify_staff)
+        self.assertTrue(any("Low AI confidence" in reason for reason in decision.reasons))
+
+    def test_triage_low_priority_high_confidence_does_not_notify(self):
+        self.assertFalse(self.logic.triage(SampleFactory.make_result(severity=1, confidence=0.95)).notify_staff)
+
+    def test_triage_is_deterministic_for_the_same_ai_output(self):
+        self.assertEqual(self.logic.triage(SAMPLE_STRUCTURAL_CROWD), self.logic.triage(SAMPLE_STRUCTURAL_CROWD))
+
+
+class DuplicateRuleTests(unittest.TestCase):
+    def setUp(self):
+        self.logic = LogicManager()
+
+    def test_normalise_location_ignores_case_and_spaces(self):
+        self.assertEqual(DuplicateDetector.normalise_location("  Lab   3 "), DuplicateDetector.normalise_location("lab 3"))
+
+    def test_hours_between_and_bad_timestamps(self):
+        self.assertEqual(DuplicateDetector.hours_between("2026-10-12T08:00:00+00:00", NOW), 2.0)
+        self.assertIsNone(DuplicateDetector.hours_between("not a date", NOW))
+
+    def test_duplicate_found_for_same_place_shared_hazard_within_window(self):
+        existing = [SampleFactory.make_incident("INC-0001", "Lab 3", ["water", "electrical"], "2026-10-12T09:30:00+00:00")]
+        duplicate_id, reason = self.logic.find_duplicate("  lab   3 ", SampleFactory.make_analysis(hazard_types=["water"]), NOW, existing)
+        self.assertEqual(duplicate_id, "INC-0001")
+        self.assertIn("30 min apart", reason)
+        self.assertIn("water", reason)
+
+    def test_no_duplicate_when_any_condition_fails(self):
+        analysis = SampleFactory.make_analysis(hazard_types=["water"])
+        cases = {
+            "other place": SampleFactory.make_incident("INC-0001", "Lobby", ["water"], "2026-10-12T09:30:00+00:00"),
+            "other hazard": SampleFactory.make_incident("INC-0002", "Lab 3", ["fire"], "2026-10-12T09:30:00+00:00"),
+            "too old": SampleFactory.make_incident("INC-0003", "Lab 3", ["water"], "2026-10-12T05:00:00+00:00"),
+        }
+        for name, record in cases.items():
+            with self.subTest(case=name):
+                self.assertEqual(self.logic.find_duplicate("Lab 3", analysis, NOW, [record]), ("", ""))
+
+    def test_no_duplicate_check_for_non_hazard_or_failed_ai(self):
+        existing = [SampleFactory.make_incident("INC-0001", "Lab 3", ["water"], "2026-10-12T09:30:00+00:00")]
+        self.assertEqual(self.logic.find_duplicate("Lab 3", None, NOW, existing), ("", ""))
+        self.assertEqual(self.logic.find_duplicate("Lab 3", SAMPLE_NOT_A_HAZARD.analysis, NOW, existing), ("", ""))
+
+    def test_duplicate_picks_most_recent_match(self):
+        existing = [
+            SampleFactory.make_incident("INC-0001", "Lab 3", ["water"], "2026-10-12T08:00:00+00:00"),
+            SampleFactory.make_incident("INC-0002", "Lab 3", ["water"], "2026-10-12T09:00:00+00:00"),
+            SampleFactory.make_incident("INC-0003", "Lab 3", ["water"], "not a date"),
+        ]
+        duplicate_id, _ = self.logic.find_duplicate("Lab 3", SampleFactory.make_analysis(hazard_types=["water"]), NOW, existing)
+        self.assertEqual(duplicate_id, "INC-0002")
+
+    def test_flag_duplicate_keeps_priority_and_marks_for_review(self):
+        decision = self.logic.triage(SampleFactory.make_result(severity=1, confidence=0.95))
+        flagged = self.logic.flag_duplicate(decision, "INC-0001", "Possible duplicate of INC-0001")
+        self.assertEqual(flagged.priority, decision.priority)
+        self.assertEqual(flagged.duplicate_of, "INC-0001")
+        self.assertTrue(flagged.needs_manual_review)
+        self.assertEqual(flagged.reasons[-1], "Possible duplicate of INC-0001")
+        self.assertEqual(decision.duplicate_of, "")  # original decision left untouched (immutable)
+        self.assertIs(self.logic.flag_duplicate(decision, "", ""), decision)
+
+
+class AdminHelperTests(unittest.TestCase):
+    def setUp(self):
+        self.logic = LogicManager()
+
+    def test_is_urgent(self):
+        for priority in ("Critical", "High", "Unrated"):
+            self.assertTrue(self.logic.is_urgent(SampleFactory.make_incident(priority=priority).decision))
+        for priority in ("Medium", "Low", "Rejected"):
+            self.assertFalse(self.logic.is_urgent(SampleFactory.make_incident(priority=priority).decision))
+
+    def test_sort_by_urgency_most_urgent_then_oldest_first(self):
+        records = [
+            SampleFactory.make_incident("INC-0001", reported_at="2026-10-01T09:00:00", priority="Low"),
+            SampleFactory.make_incident("INC-0002", reported_at="2026-10-01T10:00:00", priority="Critical"),
+            SampleFactory.make_incident("INC-0003", reported_at="2026-10-01T08:00:00", priority="Critical"),
+            SampleFactory.make_incident("INC-0004", reported_at="2026-10-01T07:00:00", priority="Medium"),
+        ]
+        self.assertEqual([item.id for item in self.logic.sort_by_urgency(records)],
+                         ["INC-0003", "INC-0002", "INC-0004", "INC-0001"])
+
+    def test_sort_uses_admin_final_decision_over_recommendation(self):
+        downgraded = SampleFactory.make_incident("A", reported_at="1", priority="Critical",
+                                   final=FinalDecision("Low", (), "", "", "admin", "2"))
+        medium = SampleFactory.make_incident("B", reported_at="2", priority="Medium")
+        self.assertEqual([item.id for item in self.logic.sort_by_urgency([downgraded, medium])], ["B", "A"])
+
+    def test_build_final_decision(self):
+        final = self.logic.build_final_decision("High", ["Security"], "checked on site", "admin01", "2026-10-12T10:00:00")
+        self.assertEqual((final.priority, final.teams, final.note, final.reviewed_by),
+                         ("High", ("Security",), "checked on site", "admin01"))
+        self.assertIn("Security", final.action)
+
+    def test_only_rejected_incidents_can_be_purged(self):
+        self.assertTrue(self.logic.can_purge(SampleFactory.make_incident(status="rejected")))
+        self.assertTrue(self.logic.can_purge(SampleFactory.make_incident(status="auto_rejected")))
+        for status in ("pending_review", "approved", "overridden"):
+            self.assertFalse(self.logic.can_purge(SampleFactory.make_incident(status=status)))
+
+
+class SummaryReportTests(unittest.TestCase):
+    """New feature: summary report (counts, rankings, urgent backlog)."""
+
+    def setUp(self):
+        self.logic = LogicManager()
+        final_ok = FinalDecision("High", ("Maintenance",), "", "", "admin01", "2026-10-12T10:30:00+00:00")
+        final_changed = FinalDecision("Low", ("Security",), "n", "", "admin01", "2026-10-12T11:00:00+00:00")
+        self.incidents = [
+            SampleFactory.make_incident("INC-0001", "Lab 3", ["water", "electrical"], "2026-10-12T10:00:00+00:00",
+                          "approved", "High", final=final_ok),
+            SampleFactory.make_incident("INC-0002", " lab   3", ["water"], "2026-10-12T10:00:00+00:00",
+                          "overridden", "High", final=final_changed),
+            SampleFactory.make_incident("INC-0003", "Lobby", ["fire"], "2026-10-12T10:00:00+00:00", "pending_review", "Critical"),
+            SampleFactory.make_incident("INC-0004", "Lobby", ["fire"], "2026-10-12T10:00:00+00:00", "pending_review", "Low",
+                          confidence_flag=True),
+        ]
+
+    def test_empty_report_is_all_zero_and_does_not_crash(self):
+        report = self.logic.summarise([])
+        self.assertEqual(report.total, 0)
+        self.assertEqual(report.hotspots, [])
+
+    def test_counts_by_status_priority_and_hazard(self):
+        report = self.logic.summarise(self.incidents)
+        self.assertEqual(report.total, 4)
+        self.assertEqual(report.by_status, {"approved": 1, "overridden": 1, "pending_review": 2})
+        self.assertEqual(report.by_priority, {"Critical": 1, "High": 1, "Low": 2})  # final decision wins
+        self.assertEqual(report.by_hazard, {"fire": 2, "water": 2, "electrical": 1})
+
+    def test_hotspots_merge_spelling_variants_and_rank_by_count(self):
+        report = self.logic.summarise(self.incidents)
+        self.assertEqual(report.hotspots, [("Lab 3", 2), ("Lobby", 2)])
+
+    def test_pending_urgent_and_low_confidence_counts(self):
+        report = self.logic.summarise(self.incidents)
+        self.assertEqual(report.pending_urgent, 1)
+        self.assertEqual(report.low_confidence, 1)
+
+    def test_ai_unavailable_is_counted(self):
+        failed = SampleFactory.make_incident("INC-0009", ai=SAMPLE_API_FAILURE, priority="Unrated")
+        self.assertEqual(self.logic.summarise([failed]).ai_unavailable, 1)
