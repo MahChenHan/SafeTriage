@@ -333,3 +333,337 @@ class AIManagerTests(unittest.TestCase):
 
     def test_gemini_provider_is_an_ai_provider(self):
         self.assertIsInstance(GeminiProvider("not-a-real-key"), AIProvider)
+
+# ==========================================================================
+# From tests/test_data_manager.py
+# ==========================================================================
+
+"""Data layer tests.
+
+``RepositoryContract`` is ONE suite of behaviour every IncidentRepository must show.
+It is run against BOTH backends (JSON and SQLite): if a subclass could not stand in for
+the interface, these tests would fail (Liskov Substitution evidence).
+"""
+
+
+
+class RepositoryContract:
+    """Mixin: concrete test classes provide self.repo (a fresh repository) and self.dir."""
+
+    def test_add_assigns_sequential_ids(self):
+        first = self.repo.add(SampleFactory.make_incident())
+        second = self.repo.add(SampleFactory.make_incident())
+        self.assertEqual((first.id, second.id), ("INC-0001", "INC-0002"))
+
+    def test_added_incident_round_trips_exactly(self):
+        saved = self.repo.add(SampleFactory.make_incident(priority="High", hazards=("water", "electrical")))
+        self.assertEqual(self.repo.get(saved.id), saved)
+        self.assertEqual(self.repo.list_all().incidents, [saved])
+
+    def test_failed_ai_incident_round_trips(self):
+        saved = self.repo.add(SampleFactory.make_incident(ai=SAMPLE_API_FAILURE, priority="Unrated"))
+        loaded = self.repo.get(saved.id)
+        self.assertFalse(loaded.ai.ok)
+        self.assertIsNone(loaded.ai.analysis)
+        self.assertEqual(loaded.ai.error_type, "api_failure")
+
+    def test_get_unknown_id_returns_none(self):
+        self.assertIsNone(self.repo.get("INC-9999"))
+
+    def test_empty_repository_lists_nothing_without_error(self):
+        result = self.repo.list_all()
+        self.assertEqual((result.incidents, result.warnings), ([], ()))
+
+    def test_query_filters_by_status_and_priority(self):
+        self.repo.add(SampleFactory.make_incident(status="pending_review", priority="Low"))
+        self.repo.add(SampleFactory.make_incident(status="pending_review", priority="Critical"))
+        self.repo.add(SampleFactory.make_incident(status="rejected", priority="Rejected"))
+        self.assertEqual(len(self.repo.query().incidents), 3)
+        self.assertEqual(len(self.repo.query(status="pending_review").incidents), 2)
+        self.assertEqual(len(self.repo.query(priority="Critical").incidents), 1)
+        self.assertEqual(len(self.repo.query(status="pending_review", priority="Low").incidents), 1)
+        self.assertEqual(self.repo.query(status="approved").incidents, [])
+
+    def test_priority_filter_uses_the_admin_final_decision(self):
+        final = FinalDecision("Low", (), "", "n", "admin01", "2026-10-12T11:00:00+00:00")
+        self.repo.add(SampleFactory.make_incident(status="overridden", priority="Critical", final=final))
+        self.assertEqual(len(self.repo.query(priority="Low").incidents), 1)
+        self.assertEqual(self.repo.query(priority="Critical").incidents, [])
+
+    def test_update_replaces_the_stored_incident(self):
+        saved = self.repo.add(SampleFactory.make_incident())
+        final = FinalDecision("High", ("Security",), "act", "ok", "admin01", "2026-10-12T11:00:00+00:00")
+        changed = saved.with_review("approved", final, "2026-10-12T11:00:00+00:00")
+        self.repo.update(changed, expected_status="pending_review")
+        stored = self.repo.get(saved.id)
+        self.assertEqual((stored.status, stored.final.reviewed_by), ("approved", "admin01"))
+        self.assertEqual(stored.updated_at, "2026-10-12T11:00:00+00:00")
+
+    def test_update_unknown_incident_raises_not_found(self):
+        with self.assertRaises(IncidentNotFoundError):
+            self.repo.update(SampleFactory.make_incident("INC-0042"))
+
+    def test_second_reviewer_gets_a_conflict_not_a_silent_overwrite(self):
+        saved = self.repo.add(SampleFactory.make_incident())
+        final = FinalDecision("High", (), "", "n", "adminA", "t")
+        self.repo.update(saved.with_review("approved", final, "t"), expected_status="pending_review")
+        second = saved.with_review("rejected", FinalDecision("Rejected", (), "", "n", "adminB", "t2"), "t2")
+        with self.assertRaises(ConflictError):
+            self.repo.update(second, expected_status="pending_review")
+        self.assertEqual(self.repo.get(saved.id).final.reviewed_by, "adminA")
+
+    def test_delete_removes_only_that_incident(self):
+        keep = self.repo.add(SampleFactory.make_incident())
+        gone = self.repo.add(SampleFactory.make_incident())
+        self.repo.delete(gone.id)
+        self.assertEqual([item.id for item in self.repo.list_all().incidents], [keep.id])
+
+    def test_delete_unknown_incident_raises_not_found(self):
+        with self.assertRaises(IncidentNotFoundError):
+            self.repo.delete("INC-0042")
+
+    def test_ids_stay_unique_after_deleting_the_newest(self):
+        self.repo.add(SampleFactory.make_incident())
+        newest = self.repo.add(SampleFactory.make_incident())
+        self.repo.delete(newest.id)
+        # JSON derives the next id from the highest remaining id (so it may reuse the deleted one);
+        # SQLite AUTOINCREMENT never reuses. Either way the id must not clash with an existing incident.
+        again = self.repo.add(SampleFactory.make_incident())
+        self.assertEqual(len({item.id for item in self.repo.list_all().incidents}), 2)
+        self.assertIsNotNone(again.id)
+
+    def test_concurrent_adds_never_lose_or_duplicate_records(self):
+        errors = []
+
+        def worker():
+            try:
+                for _ in range(5):
+                    self.repo.add(SampleFactory.make_incident())
+            except Exception as error:  # pragma: no cover - only runs on failure
+                errors.append(error)
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        ids = [item.id for item in self.repo.list_all().incidents]
+        self.assertEqual(errors, [])
+        self.assertEqual(len(ids), 20)
+        self.assertEqual(len(set(ids)), 20)
+
+    def test_data_survives_a_new_repository_object_on_the_same_storage(self):
+        saved = self.repo.add(SampleFactory.make_incident())
+        reopened = self.make_repository()
+        self.assertEqual(reopened.get(saved.id), saved)   # "across separate runs"
+
+    def test_it_is_an_incident_repository(self):
+        self.assertIsInstance(self.repo, IncidentRepository)
+
+
+class JsonRepositoryTests(RepositoryContract, unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = self._tmp.name
+        self.repo = self.make_repository()
+
+    def make_repository(self):
+        return JsonIncidentRepository(os.path.join(self.dir, "incidents.json"))
+
+    # -------- JSON-specific failure handling (exception-handling matrix rows)
+    def write_raw(self, text):
+        with open(self.repo.path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def backups(self):
+        return [name for name in os.listdir(self.dir) if ".corrupt-" in name]
+
+    def test_missing_file_is_treated_as_empty_and_created_on_first_save(self):
+        self.assertFalse(os.path.exists(self.repo.path))
+        self.assertEqual(self.repo.list_all().incidents, [])
+        self.repo.add(SampleFactory.make_incident())
+        self.assertTrue(os.path.exists(self.repo.path))
+
+    def test_corrupt_json_is_quarantined_and_program_starts_empty(self):
+        self.write_raw("{ this is not json")
+        result = self.repo.list_all()
+        self.assertEqual(result.incidents, [])
+        self.assertIn("Backed up", result.warnings[0])
+        self.assertEqual(len(self.backups()), 1)
+        self.assertEqual(self.repo.add(SampleFactory.make_incident()).id, "INC-0001")   # usable again
+
+    def test_wrong_top_level_type_is_quarantined(self):
+        self.write_raw('{"not": "a list"}')
+        self.assertIn("top level is not a list", self.repo.list_all().warnings[0])
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_non_utf8_file_is_quarantined(self):
+        with open(self.repo.path, "wb") as handle:
+            handle.write(b"\xff\xfe\x00bad")
+        self.assertEqual(self.repo.list_all().incidents, [])
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_junk_entries_are_ignored_with_a_warning(self):
+        good = SampleFactory.make_incident("INC-0001").to_dict()
+        self.write_raw(json.dumps([good, "junk", 5, None]))
+        result = self.repo.list_all()
+        self.assertEqual(len(result.incidents), 1)
+        self.assertIn("3 malformed entries", result.warnings[0])
+
+    def test_damaged_record_is_hidden_but_preserved_in_the_file(self):
+        good = SampleFactory.make_incident("INC-0001").to_dict()
+        damaged = {"id": "INC-0002", "status": "pending_review", "decision": {"priority": 5}}
+        self.write_raw(json.dumps([good, damaged]))
+        result = self.repo.list_all()
+        self.assertEqual([item.id for item in result.incidents], ["INC-0001"])
+        self.assertIn("1 damaged incident(s) were skipped", result.warnings[0])
+        self.repo.add(SampleFactory.make_incident())                     # a later save must not drop the damaged record
+        with open(self.repo.path, encoding="utf-8") as handle:
+            ids = [record["id"] for record in json.load(handle)]
+        self.assertEqual(ids, ["INC-0001", "INC-0002", "INC-0003"])
+
+    def test_unwritable_location_raises_storage_error_not_a_crash(self):
+        blocker = os.path.join(self.dir, "blocker")
+        with open(blocker, "w") as handle:
+            handle.write("a file, not a folder")
+        repo = JsonIncidentRepository(os.path.join(blocker, "incidents.json"))
+        with self.assertRaises(StorageError):
+            repo.add(SampleFactory.make_incident())
+
+    def test_no_temp_files_are_left_behind(self):
+        self.repo.add(SampleFactory.make_incident())
+        self.assertEqual([n for n in os.listdir(self.dir) if n.endswith(".tmp")], [])
+
+    def test_part_1_data_file_still_loads(self):
+        """Regression: a file written by the procedural Part 1 program (dict records)."""
+        part1 = [{
+            "id": "INC-0001", "reporter_id": "Bob", "location": "Lab 3", "description": "Water on socket",
+            "ai": {"ok": True, "analysis": {"is_hazard_report": True, "hazard_types": ["electrical", "water"],
+                                           "severity": 5, "injury_present": False, "people_exposed": 6,
+                                           "confidence": 0.96, "summary": "Water on live socket."},
+                   "model": "gemini", "attempts": 1, "error_type": "", "error": ""},
+            "decision": {"outcome": "dispatch_recommended", "priority": "Critical", "teams": ["Electrical"],
+                         "action": "IMMEDIATE", "notify_staff": True, "needs_manual_review": False,
+                         "reasons": ["Base level Critical"]},
+            "status": "pending_review", "reported_at": "2026-10-12T09:00:00+00:00",
+        }, {
+            "id": "INC-0002", "reporter_id": "Cy", "location": "Lobby", "description": "AI was down",
+            "ai": {"ok": False, "analysis": None, "model": "g", "attempts": 3,
+                   "error_type": "api_failure", "error": "timeout"},
+            "decision": {"priority": "Unrated", "teams": ["Workplace Safety"]},
+            "status": "pending_review", "reported_at": "2026-10-12T09:05:00+00:00",
+        }]
+        self.write_raw(json.dumps(part1))
+        result = self.repo.list_all()
+        self.assertEqual(len(result.incidents), 2)
+        self.assertEqual(result.warnings, ())
+        self.assertEqual(result.incidents[0].ai.analysis.hazard_types, ("electrical", "water"))
+        self.assertFalse(result.incidents[1].ai.ok)
+
+
+class SqliteRepositoryTests(RepositoryContract, unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = self._tmp.name
+        self.repo = self.make_repository()
+
+    def make_repository(self):
+        return SqliteIncidentRepository(os.path.join(self.dir, "incidents.db"))
+
+    def test_creates_missing_folder_and_database(self):
+        nested = os.path.join(self.dir, "a", "b", "incidents.db")
+        SqliteIncidentRepository(nested)
+        self.assertTrue(os.path.exists(nested))
+
+    def test_garbage_file_is_quarantined_and_a_fresh_database_is_created(self):
+        path = os.path.join(self.dir, "broken.db")
+        with open(path, "wb") as handle:
+            handle.write(b"this is definitely not a sqlite database file" * 10)
+        repo = SqliteIncidentRepository(path)
+        result = repo.list_all()
+        self.assertEqual(result.incidents, [])
+        self.assertIn("Backed up", result.warnings[0])
+        self.assertTrue(any(".corrupt-" in name for name in os.listdir(self.dir)))
+        self.assertEqual(repo.add(SampleFactory.make_incident()).id, "INC-0001")
+
+    def test_damaged_row_is_skipped_with_a_warning_not_a_crash(self):
+        self.repo.add(SampleFactory.make_incident())
+        with sqlite3.connect(self.repo.path) as connection:
+            connection.execute("UPDATE incidents SET ai_json = 'not json' WHERE id = 'INC-0001'")
+        self.repo.add(SampleFactory.make_incident())
+        result = self.repo.list_all()
+        self.assertEqual([item.id for item in result.incidents], ["INC-0002"])
+        self.assertIn("1 damaged incident(s) were skipped", result.warnings[0])
+
+    def test_sql_injection_in_text_fields_is_stored_as_plain_text(self):
+        nasty = "Lab'); DROP TABLE incidents;--"
+        saved = self.repo.add(replace(SampleFactory.make_incident(), location=nasty, description=nasty))
+        self.assertEqual(self.repo.get(saved.id).location, nasty)
+        self.assertEqual(len(self.repo.list_all().incidents), 1)   # table still exists
+
+    def test_unwritable_location_raises_storage_error(self):
+        blocker = os.path.join(self.dir, "blocker")
+        with open(blocker, "w") as handle:
+            handle.write("a file, not a folder")
+        with self.assertRaises(StorageError):
+            SqliteIncidentRepository(os.path.join(blocker, "incidents.db"))
+
+
+class FactoryAndManagerTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = self._tmp.name
+
+    def test_factory_builds_each_backend(self):
+        self.assertIsInstance(RepositoryFactory.create("json", self.dir), JsonIncidentRepository)
+        self.assertIsInstance(RepositoryFactory.create(" SQLite ", self.dir), SqliteIncidentRepository)
+
+    def test_factory_rejects_unknown_backend_with_a_clear_message(self):
+        with self.assertRaisesRegex(StorageError, "Unknown storage backend 'mongo'"):
+            RepositoryFactory.create("mongo", self.dir)
+
+    def test_factory_reads_environment(self):
+        old = {key: os.environ.get(key) for key in ("DATA_DIR", "SAFETRIAGE_STORAGE")}
+        self.addCleanup(lambda: [os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+                                 for k, v in old.items()])
+        os.environ["DATA_DIR"], os.environ["SAFETRIAGE_STORAGE"] = self.dir, "sqlite"
+        self.assertIsInstance(RepositoryFactory.from_environment(), SqliteIncidentRepository)
+
+    def test_data_manager_works_with_either_backend(self):
+        for backend in ("json", "sqlite"):
+            with self.subTest(backend=backend):
+                folder = os.path.join(self.dir, backend)
+                data = DataManager(RepositoryFactory.create(backend, folder))
+                saved = data.add_incident(SampleFactory.make_incident(reported_at=""))   # missing timestamp is filled in
+                self.assertTrue(saved.reported_at)
+                self.assertEqual(len(data.open_incidents().incidents), 1)
+                final = FinalDecision("High", ("Security",), "a", "n", "admin01", "t")
+                reviewed = data.record_review(saved, "approved", final)
+                self.assertEqual(reviewed.status, "approved")
+                self.assertEqual(data.open_incidents().incidents, [])
+                with self.assertRaises(ConflictError):          # the same stale copy cannot review twice
+                    data.record_review(saved, "rejected", final)
+                data.delete_incident(saved.id)
+                self.assertEqual(data.load_incidents().incidents, [])
+
+    def test_incident_filter_empty_arguments_mean_no_filter(self):
+        items = [SampleFactory.make_incident("A", priority="Low"), SampleFactory.make_incident("B", priority="High", status="approved")]
+        self.assertEqual(len(IncidentFilter.apply(items)), 2)
+        self.assertEqual([i.id for i in IncidentFilter.apply(items, status="approved")], ["B"])
+
+    def test_incident_from_dict_rejects_damaged_records(self):
+        good = SampleFactory.make_incident("INC-0001").to_dict()
+        for label, mutate in {
+            "no id": lambda d: d.pop("id"),
+            "bad status": lambda d: d.update(status=5),
+            "bad decision": lambda d: d.update(decision={"priority": 3}),
+            "bad analysis": lambda d: d["ai"].update(analysis={"severity": "high"}),
+            "bad teams": lambda d: d["decision"].update(teams="Security"),
+        }.items():
+            with self.subTest(case=label), self.assertRaises(ValueError):
+                broken = json.loads(json.dumps(good))
+                mutate(broken)
+                Incident.from_dict(broken)
