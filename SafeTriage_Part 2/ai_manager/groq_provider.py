@@ -1,6 +1,7 @@
 """AI MANAGER - ai_manager/groq_provider.py
 
-Role: Backup AI provider. Calls Groq's free, OpenAI-compatible chat API when the primary (Gemini) fails.
+Role: Builds prompts, calls the AI provider (Gemini, with Groq as backup), parses the JSON reply
+and validates its schema. Every record passes through here.
 Class in this file: GroqProvider
 See README section "Where each manager lives" for the full map.
 """
@@ -19,26 +20,26 @@ from constants import DEFAULT_GROQ_MODEL, GROQ_CHAT_URL
 Transport = Callable[[urllib.request.Request, float], bytes]
 
 
-def _http_post(request: urllib.request.Request, timeout: float) -> bytes:
-    """The only function that touches the network. Tests replace it with a fake."""
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
-    except urllib.error.HTTPError as error:
-        # Groq's error body says why (for example: invalid key, or model not found). Keep it for the log.
-        detail = error.read().decode("utf-8", errors="replace")[:300]
-        raise RuntimeError(f"Groq HTTP {error.code}: {detail}") from error
-
-
 class GroqProvider(AIProvider):
     """Groq implementation of AIProvider. Ignores the model name passed in: it uses its own (GROQ_MODEL)."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None,
-                 transport: Transport = _http_post, timeout: float = 30.0) -> None:
+                 transport: Transport | None = None, timeout: float = 30.0) -> None:
         self._api_key = api_key
         self._model = model or os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
-        self._transport = transport
+        self._transport = transport or self._http_post   # tests inject a fake transport instead
         self._timeout = timeout
+
+    @staticmethod
+    def _http_post(request: urllib.request.Request, timeout: float) -> bytes:
+        """The only method that touches the network."""
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            # Groq's error body says why (for example: invalid key, or model not found). Keep it for the log.
+            detail = error.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"Groq HTTP {error.code}: {detail}") from error
 
     @property
     def model(self) -> str:
