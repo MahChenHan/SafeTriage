@@ -169,8 +169,9 @@ class ScriptedIO:
     def text(self) -> str:
         return "\n".join(self.output)
 
+
 # ==========================================================================
-#tests/test_ai_manager.py
+# From tests/test_ai_manager.py
 # ==========================================================================
 
 """AIManager tests: prompt, response validation, retries, timeout, failure handling.
@@ -333,6 +334,7 @@ class AIManagerTests(unittest.TestCase):
 
     def test_gemini_provider_is_an_ai_provider(self):
         self.assertIsInstance(GeminiProvider("not-a-real-key"), AIProvider)
+
 
 # ==========================================================================
 # From tests/test_data_manager.py
@@ -668,6 +670,7 @@ class FactoryAndManagerTests(unittest.TestCase):
                 mutate(broken)
                 Incident.from_dict(broken)
 
+
 # ==========================================================================
 # From tests/test_io_manager.py
 # ==========================================================================
@@ -849,7 +852,9 @@ class DisplayTests(unittest.TestCase):
         io, _ = IOFactory.make_io([])
         text = Screens().summary(self.logic.summarise([]))
         self.assertIn("Total incidents on file : 0", text)
-        # ==========================================================================
+
+
+# ==========================================================================
 # From tests/test_logic_manager.py
 # ==========================================================================
 
@@ -1191,6 +1196,7 @@ class SummaryReportTests(unittest.TestCase):
     def test_ai_unavailable_is_counted(self):
         failed = SampleFactory.make_incident("INC-0009", ai=SAMPLE_API_FAILURE, priority="Unrated")
         self.assertEqual(self.logic.summarise([failed]).ai_unavailable, 1)
+
 
 # ==========================================================================
 # From tests/test_sessions.py
@@ -1538,6 +1544,13 @@ class GroqProviderTests(unittest.TestCase):
                 provider.generate("p", "m")
         self.assertEqual(calls, [])
 
+    def test_default_transport_is_the_class_own_network_method(self):
+        """No loose module-level function: the network call is a method of GroqProvider."""
+        import ai_manager.groq_provider as module
+
+        self.assertEqual(GroqProvider(api_key="k")._transport, GroqProvider._http_post)
+        self.assertFalse(hasattr(module, "_http_post"))
+
     def test_unexpected_response_shape_raises_value_error(self):
         with self.assertRaisesRegex(ValueError, "unexpected Groq response"):
             GroqProvider.extract_text(b'{"error": "rate limited"}')
@@ -1579,6 +1592,72 @@ class FallbackAIProviderTests(unittest.TestCase):
     def test_provider_names_show_the_order(self):
         names = FallbackAIProvider([ScriptedProvider([]), GroqProvider(api_key="k")]).provider_names
         self.assertEqual(names, ["ScriptedProvider", "GroqProvider"])
+
+    def test_backup_answers_when_primary_hangs(self):
+        """A primary that never replies must not use up the time the backup needs."""
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        class HangingProvider(AIProvider):
+            def generate(self, prompt: str, model: str) -> str:
+                release.wait(5)
+                return "too late"
+
+        backup = ScriptedProvider(["backup reply"])
+        fallback = FallbackAIProvider([HangingProvider(), backup], timeout_seconds=0.05)
+        self.assertEqual(fallback.generate("p", "m"), "backup reply")
+        self.assertEqual(backup.calls, 1)
+
+    def test_timeout_is_raised_when_every_provider_hangs(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        class HangingProvider(AIProvider):
+            def generate(self, prompt: str, model: str) -> str:
+                release.wait(5)
+                return "too late"
+
+        fallback = FallbackAIProvider([HangingProvider(), HangingProvider()], timeout_seconds=0.05)
+        with self.assertRaises(AITimeoutError):
+            fallback.generate("p", "m")
+
+    def test_total_timeout_covers_every_provider(self):
+        chain = FallbackAIProvider([ScriptedProvider([]), ScriptedProvider([])], timeout_seconds=30)
+        self.assertEqual(chain.total_timeout, 60)
+        self.assertIsNone(FallbackAIProvider([ScriptedProvider([])]).total_timeout)
+
+    def test_groq_key_is_read_from_secrets_local_for_runs_without_docker(self):
+        """Regression: a local "python main.py" run has no .env, so Groq was never added."""
+        import sys
+        import types
+
+        fake = types.ModuleType("secrets_local")
+        fake.GEMINI_API_KEY = "g"
+        fake.GROQ_API_KEY = "k"
+        fake.GROQ_MODEL = "some-model"
+        with unittest.mock.patch.dict(sys.modules, {"secrets_local": fake}), \
+                unittest.mock.patch.dict(os.environ, {}, clear=True):
+            provider = Application._build_ai_provider()
+        self.assertIsInstance(provider, FallbackAIProvider)
+        self.assertEqual(provider.provider_names, ["GeminiProvider", "GroqProvider"])
+        self.assertEqual(provider._providers[1].model, "some-model")
+
+    def test_no_backup_when_no_groq_key_anywhere(self):
+        import sys
+
+        with unittest.mock.patch.dict(sys.modules, {"secrets_local": None}), \
+                unittest.mock.patch.dict(os.environ, {"GEMINI_API_KEY": "g"}, clear=True):
+            provider = Application._build_ai_provider()
+        self.assertIsInstance(provider, GeminiProvider)
+
+    def test_application_gives_the_manager_time_for_the_whole_chain(self):
+        """Regression: the manager's 30 s limit used to end the call before Groq was tried."""
+        with unittest.mock.patch.dict(os.environ, {"GROQ_API_KEY": "k", "GEMINI_API_KEY": "g"}):
+            provider = Application._build_ai_provider()
+            manager = Application._build_ai_manager(provider)
+        self.assertIsInstance(provider, FallbackAIProvider)
+        self.assertEqual(provider.total_timeout, 60)
+        self.assertGreater(manager._timeout, provider.total_timeout)
 
 
 if __name__ == "__main__":
