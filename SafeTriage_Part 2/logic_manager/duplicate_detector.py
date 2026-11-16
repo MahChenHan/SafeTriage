@@ -1,14 +1,15 @@
 """LOGIC MANAGER - logic_manager/duplicate_detector.py
 
-Role: Applies the domain business rules to AI-enriched records: scores, escalation, routing, duplicates and summary reports.
+Role: Applies the domain business rules to AI-enriched records: scores, escalation, routing,
+duplicates and summary reports.
 Class in this file: DuplicateDetector
 See README section "Where each manager lives" for the full map.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable
 
 from constants import DUPLICATE_WINDOW_HOURS
 from domain.ai_analysis import AIAnalysis

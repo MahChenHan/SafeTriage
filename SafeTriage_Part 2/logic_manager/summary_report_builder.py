@@ -1,6 +1,7 @@
 """LOGIC MANAGER - logic_manager/summary_report_builder.py
 
-Role: Applies the domain business rules to AI-enriched records: scores, escalation, routing, duplicates and summary reports.
+Role: Applies the domain business rules to AI-enriched records: scores, escalation, routing,
+duplicates and summary reports.
 Class in this file: SummaryReportBuilder
 See README section "Where each manager lives" for the full map.
 """
@@ -9,7 +10,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from constants import ALL_PRIORITIES, STATUS_PENDING
+from constants import ALL_PRIORITIES, HOTSPOT_COUNT, STATUS_PENDING, URGENT_PRIORITIES
 from domain.incident import Incident
 from logic_manager.duplicate_detector import DuplicateDetector
 from logic_manager.summary_report import SummaryReport
@@ -18,7 +19,7 @@ from logic_manager.summary_report import SummaryReport
 class SummaryReportBuilder:
     """Counts, rankings and urgent-backlog figures over a list of incidents."""
 
-    def __init__(self, hotspot_count: int = 3) -> None:
+    def __init__(self, hotspot_count: int = HOTSPOT_COUNT) -> None:
         self._hotspot_count = hotspot_count
 
     def build(self, incidents: list[Incident]) -> SummaryReport:
@@ -43,7 +44,7 @@ class SummaryReportBuilder:
             hotspots=[(place_label[key], count) for key, count in ranked_places],
             pending_urgent=sum(
                 1 for item in incidents
-                if item.status == STATUS_PENDING and item.effective_priority in ("Critical", "High", "Unrated")
+                if item.status == STATUS_PENDING and item.effective_priority in URGENT_PRIORITIES
             ),
             low_confidence=sum(1 for item in incidents if item.decision.needs_manual_review),
             ai_unavailable=sum(1 for item in incidents if not item.ai.ok),

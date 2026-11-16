@@ -1,15 +1,20 @@
 """LOGIC MANAGER - logic_manager/logic_manager.py
 
-Role: Applies the domain business rules to AI-enriched records: scores, escalation, routing, duplicates and summary reports.
+Role: Applies the domain business rules to AI-enriched records: scores, escalation, routing,
+duplicates and summary reports.
 Class in this file: LogicManager
 See README section "Where each manager lives" for the full map.
 """
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
-from constants import LOW_CONFIDENCE_THRESHOLD, OUTCOME_DISPATCH, OUTCOME_MANUAL, OUTCOME_REJECTED, PRIORITY_LEVELS, PURGEABLE_STATUSES, URGENCY_RANK
+from constants import (
+    LOW_CONFIDENCE_THRESHOLD, NOTIFY_PRIORITIES, OUTCOME_DISPATCH, OUTCOME_MANUAL, OUTCOME_REJECTED,
+    PRIORITY_LEVELS, PRIORITY_REJECTED, PRIORITY_UNRATED, PURGEABLE_STATUSES, TEAM_DEFAULT, URGENCY_RANK,
+    URGENT_PRIORITIES,
+)
 from domain.ai_analysis import AIAnalysis
 from domain.ai_result import AIResult
 from domain.decision import Decision
@@ -77,16 +82,16 @@ class LogicManager:
         if not ai_result.ok or ai_result.analysis is None:
             reason = f"AI analysis unavailable ({ai_result.error_type or 'unknown'}): {ai_result.error}"
             return Decision(
-                outcome=OUTCOME_MANUAL, priority="Unrated", teams=("Workplace Safety",),
-                action=self._router.action_for("Unrated", []), notify_staff=True,
+                outcome=OUTCOME_MANUAL, priority=PRIORITY_UNRATED, teams=(TEAM_DEFAULT,),
+                action=self._router.action_for(PRIORITY_UNRATED, []), notify_staff=True,
                 needs_manual_review=True, reasons=(reason,),
             )
 
         analysis = ai_result.analysis
         if not analysis.is_hazard_report:
             return Decision(
-                outcome=OUTCOME_REJECTED, priority="Rejected", teams=(),
-                action=self._router.action_for("Rejected", []), notify_staff=False,
+                outcome=OUTCOME_REJECTED, priority=PRIORITY_REJECTED, teams=(),
+                action=self._router.action_for(PRIORITY_REJECTED, []), notify_staff=False,
                 needs_manual_review=False,
                 reasons=("AI judged this text is not a workplace hazard report",),
             )
@@ -99,7 +104,7 @@ class LogicManager:
         return Decision(
             outcome=OUTCOME_DISPATCH, priority=priority, teams=tuple(teams),
             action=self._router.action_for(priority, teams),
-            notify_staff=priority in ("High", "Critical") or manual,
+            notify_staff=priority in NOTIFY_PRIORITIES or manual,
             needs_manual_review=manual, reasons=tuple(reasons),
         )
 
@@ -117,7 +122,7 @@ class LogicManager:
     @staticmethod
     def is_urgent(decision: Decision | FinalDecision) -> bool:
         """True when an admin should look at this straight away."""
-        return decision.priority in ("Critical", "High", "Unrated")
+        return decision.priority in URGENT_PRIORITIES
 
     @staticmethod
     def sort_by_urgency(incidents: Iterable[Incident]) -> list[Incident]:
